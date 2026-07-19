@@ -148,7 +148,7 @@ EFI_STATUS PatchSsdt4PowerWall(
     EntryCount = (Xsdt->Length - sizeof(EFI_ACPI_SDT_HEADER)) / sizeof(UINT64);
     EntryPtr = (UINT64 *)((UINT8 *)Xsdt + sizeof(EFI_ACPI_SDT_HEADER));
 
-    LogToFile(SystemTable, ImageHandle, L"[+] Starting in-memory scan for SSDT tables...");
+    LogToFile(SystemTable, ImageHandle, L"[+] Starting in-memory scan for SSDT/DSDT tables...");
 
     for (Index = 0; Index < EntryCount; Index++) {
         EFI_ACPI_SDT_HEADER *Table = (EFI_ACPI_SDT_HEADER *)(EntryPtr[Index]);
@@ -224,17 +224,17 @@ EFI_STATUS PatchSsdt4PowerWall(
                             CHAR16 CountStr[32];
                             StatusToHex(RepCount, CountStr);
                             
-                            UefiMemcpy(LogBuf, L"    [+] Patch success: ", 23 * sizeof(CHAR16));
+                            UefiMemcpy(LogBuf, L"    [+] SSDT Patch success: ", 28 * sizeof(CHAR16));
                             
                             int nLen = 0;
                             while (Patch->Name[nLen] != 0 && nLen < 50) {
-                                LogBuf[23 + nLen] = Patch->Name[nLen];
+                                LogBuf[28 + nLen] = Patch->Name[nLen];
                                 nLen++;
                             }
-                            UefiMemcpy(LogBuf + 23 + nLen, L" (count: ", 9 * sizeof(CHAR16));
-                            UefiMemcpy(LogBuf + 32 + nLen, CountStr, 18 * sizeof(CHAR16));
-                            UefiMemcpy(LogBuf + 50 + nLen, L")", 1 * sizeof(CHAR16));
-                            LogBuf[51 + nLen] = 0;
+                            UefiMemcpy(LogBuf + 28 + nLen, L" (count: ", 9 * sizeof(CHAR16));
+                            UefiMemcpy(LogBuf + 37 + nLen, CountStr, 18 * sizeof(CHAR16));
+                            UefiMemcpy(LogBuf + 55 + nLen, L")", 1 * sizeof(CHAR16));
+                            LogBuf[56 + nLen] = 0;
                             LogToFile(SystemTable, ImageHandle, LogBuf);
                         }
                     }
@@ -260,6 +260,123 @@ EFI_STATUS PatchSsdt4PowerWall(
                 }
             }
         }
+        else if (Table->Signature == 0x50434146) { // "FACP"
+            EFI_STATUS Status;
+            UINTN TableLength = Table->Length;
+            UINTN PagesNeeded = (TableLength + 4095) / 4096;
+            EFI_PHYSICAL_ADDRESS NewTableAddr = 0;
+            EFI_ACPI_SDT_HEADER *NewTable = NULL;
+
+            LogToFile(SystemTable, ImageHandle, L"[+] Matches FACP table. Allocating writable shadow memory page...");
+
+            Status = BS->AllocatePages(0, 9, PagesNeeded, &NewTableAddr); 
+            if (EFI_ERROR(Status)) {
+                LogToFile(SystemTable, ImageHandle, L"[-] Error: Failed to allocate memory for FACP shadow copy.");
+                continue;
+            }
+
+            NewTable = (EFI_ACPI_SDT_HEADER *)NewTableAddr;
+            UefiMemcpy(NewTable, Table, TableLength);
+
+            UINT64 *XDsdtPtr = (UINT64 *)((UINT8 *)NewTable + 140);
+            UINT32 *DsdtPtr = (UINT32 *)((UINT8 *)NewTable + 40);
+            UINT64 DsdtPhysicalAddress = *XDsdtPtr;
+            if (DsdtPhysicalAddress == 0) {
+                DsdtPhysicalAddress = *DsdtPtr;
+            }
+
+            BOOLEAN DsdtPatched = FALSE;
+
+            if (DsdtPhysicalAddress != 0) {
+                EFI_ACPI_SDT_HEADER *DsdtTable = (EFI_ACPI_SDT_HEADER *)DsdtPhysicalAddress;
+                if (IsValidAcpiPointer(DsdtTable) && DsdtTable->Signature == 0x54445344) { // "DSDT"
+                    UINTN DsdtLength = DsdtTable->Length;
+                    UINTN DsdtPagesNeeded = (DsdtLength + 4095) / 4096;
+                    EFI_PHYSICAL_ADDRESS NewDsdtAddr = 0;
+                    EFI_ACPI_SDT_HEADER *NewDsdt = NULL;
+                    UINTN DsdtPatchesApplied = 0;
+
+                    LogToFile(SystemTable, ImageHandle, L"[+] Found valid DSDT table from FACP. Allocating writable shadow memory page...");
+
+                    Status = BS->AllocatePages(0, 9, DsdtPagesNeeded, &NewDsdtAddr);
+                    if (!EFI_ERROR(Status)) {
+                        NewDsdt = (EFI_ACPI_SDT_HEADER *)NewDsdtAddr;
+                        UefiMemcpy(NewDsdt, DsdtTable, DsdtLength);
+
+                        UINTN pIdx;
+                        for (pIdx = 0; pIdx < gPatchCount; pIdx++) {
+                            const ACPI_PATCH *Patch = &gPatches[pIdx];
+                            if (NewDsdt->OemTableId == Patch->OemTableId) {
+                                UINTN RepCount = SearchAndReplace((UINT8 *)NewDsdt, DsdtLength, 
+                                                                 Patch->Search, Patch->SearchLen, 
+                                                                 Patch->Replace, Patch->ReplaceLen);
+                                if (RepCount > 0) {
+                                    DsdtPatchesApplied += RepCount;
+
+                                    CHAR16 CountStr[32];
+                                    StatusToHex(RepCount, CountStr);
+
+                                    UefiMemcpy(LogBuf, L"    [+] DSDT Patch success: ", 28 * sizeof(CHAR16));
+
+                                    int nLen = 0;
+                                    while (Patch->Name[nLen] != 0 && nLen < 50) {
+                                        LogBuf[28 + nLen] = Patch->Name[nLen];
+                                        nLen++;
+                                    }
+                                    UefiMemcpy(LogBuf + 28 + nLen, L" (count: ", 9 * sizeof(CHAR16));
+                                    UefiMemcpy(LogBuf + 37 + nLen, CountStr, 18 * sizeof(CHAR16));
+                                    UefiMemcpy(LogBuf + 55 + nLen, L")", 1 * sizeof(CHAR16));
+                                    LogBuf[56 + nLen] = 0;
+                                    LogToFile(SystemTable, ImageHandle, LogBuf);
+                                }
+                            }
+                        }
+
+                        if (DsdtPatchesApplied > 0) {
+                            CHAR16 NewDsdtAddrStr[32];
+                            NewDsdt->Checksum = 0;
+                            NewDsdt->Checksum = CalculateChecksum8((UINT8 *)NewDsdt, DsdtLength);
+
+                            *XDsdtPtr = (UINT64)NewDsdtAddr;
+                            if (DsdtPhysicalAddress <= 0xFFFFFFFF) {
+                                *DsdtPtr = (UINT32)NewDsdtAddr;
+                            }
+
+                            DsdtPatched = TRUE;
+                            PatchedAny = TRUE;
+
+                            StatusToHex((EFI_STATUS)NewDsdtAddr, NewDsdtAddrStr);
+                            UefiMemcpy(LogBuf, L"[+] DSDT redirection applied. New DSDT address: ", 48 * sizeof(CHAR16));
+                            UefiMemcpy(LogBuf + 48, NewDsdtAddrStr, 18 * sizeof(CHAR16));
+                            LogBuf[66] = 0;
+                            LogToFile(SystemTable, ImageHandle, LogBuf);
+                        } else {
+                            LogToFile(SystemTable, ImageHandle, L"[-] Warn: No patch patterns matched in DSDT.");
+                            BS->FreePages(NewDsdtAddr, DsdtPagesNeeded);
+                        }
+                    } else {
+                        LogToFile(SystemTable, ImageHandle, L"[-] Error: Failed to allocate memory for DSDT shadow copy.");
+                    }
+                }
+            }
+
+            if (DsdtPatched) {
+                CHAR16 NewAddrStr[32];
+                NewTable->Checksum = 0;
+                NewTable->Checksum = CalculateChecksum8((UINT8 *)NewTable, TableLength);
+
+                EntryPtr[Index] = (UINT64)NewTableAddr;
+
+                StatusToHex((EFI_STATUS)NewTableAddr, NewAddrStr);
+
+                UefiMemcpy(LogBuf, L"[+] FACP redirection applied. New FACP address: ", 48 * sizeof(CHAR16));
+                UefiMemcpy(LogBuf + 48, NewAddrStr, 18 * sizeof(CHAR16));
+                LogBuf[66] = 0;
+                LogToFile(SystemTable, ImageHandle, LogBuf);
+            } else {
+                BS->FreePages(NewTableAddr, PagesNeeded);
+            }
+        }
     }
 
     if (PatchedAny) {
@@ -268,7 +385,7 @@ EFI_STATUS PatchSsdt4PowerWall(
         LogToFile(SystemTable, ImageHandle, L"[+] All ACPI memory patches applied successfully.");
         return EFI_SUCCESS;
     } else {
-        LogToFile(SystemTable, ImageHandle, L"[-] Warn: No target SSDT tables with matching patch patterns were found.");
+        LogToFile(SystemTable, ImageHandle, L"[-] Warn: No target SSDT/DSDT tables with matching patch patterns were found.");
         return EFI_SUCCESS;
     }
 }

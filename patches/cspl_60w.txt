@@ -1,0 +1,3 @@
+table=EDK2
+find=700A2D60
+replace=700A3C60

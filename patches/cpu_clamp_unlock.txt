@@ -1,0 +1,3 @@
+table=EDK2
+find=934442465301
+replace=9344424653FF

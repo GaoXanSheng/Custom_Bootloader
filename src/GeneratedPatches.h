@@ -23,17 +23,53 @@ static const UINT8 Patch_atpp_unlock_Replace[] = { 0x70, 0x0B, 0xE0, 0x01, 0x41,
 
 static const CHAR16 Patch_atpp_unlock_WName[] = { L'a', L't', L'p', L'p', L'_', L'u', L'n', L'l', L'o', L'c', L'k', 0 };
 
-static const UINT8 Patch_nce2_unlock_Find[] = { 0x70, 0x01, 0x4E, 0x43, 0x45, 0x32 };
-static const UINT8 Patch_nce2_unlock_Replace[] = { 0x70, 0x00, 0x4E, 0x43, 0x45, 0x32 };
+static const UINT8 Patch_cpu_clamp_unlock_Find[] = { 0x93, 0x44, 0x42, 0x46, 0x53, 0x01 };
+static const UINT8 Patch_cpu_clamp_unlock_Replace[] = { 0x93, 0x44, 0x42, 0x46, 0x53, 0xFF };
 
-static const CHAR16 Patch_nce2_unlock_WName[] = { L'n', L'c', L'e', L'2', L'_', L'u', L'n', L'l', L'o', L'c', L'k', 0 };
+static const CHAR16 Patch_cpu_clamp_unlock_WName[] = { L'c', L'p', L'u', L'_', L'c', L'l', L'a', L'm', L'p', L'_', L'u', L'n', L'l', L'o', L'c', L'k', 0 };
+
+static const UINT8 Patch_cpu_limit_65w_Find[] = { 0x0B, 0xC8, 0xAF };
+static const UINT8 Patch_cpu_limit_65w_Replace[] = { 0x0B, 0xFF, 0xFF };
+
+static const CHAR16 Patch_cpu_limit_65w_WName[] = { L'c', L'p', L'u', L'_', L'l', L'i', L'm', L'i', L't', L'_', L'6', L'5', L'w', 0 };
+
+static const UINT8 Patch_cspl_60w_Find[] = { 0x70, 0x0A, 0x2D, 0x60 };
+static const UINT8 Patch_cspl_60w_Replace[] = { 0x70, 0x0A, 0x3C, 0x60 };
+
+static const CHAR16 Patch_cspl_60w_WName[] = { L'c', L's', L'p', L'l', L'_', L'6', L'0', L'w', 0 };
+
+static const UINT8 Patch_cspl_r9_60w_Find[] = { 0x70, 0x0A, 0x37, 0x60 };
+static const UINT8 Patch_cspl_r9_60w_Replace[] = { 0x70, 0x0A, 0x3C, 0x60 };
+
+static const CHAR16 Patch_cspl_r9_60w_WName[] = { L'c', L's', L'p', L'l', L'_', L'r', L'9', L'_', L'6', L'0', L'w', 0 };
+
+static const UINT8 Patch_fppt_80w_Find[] = { 0x70, 0x0A, 0x41, 0x60 };
+static const UINT8 Patch_fppt_80w_Replace[] = { 0x70, 0x0A, 0x50, 0x60 };
+
+static const CHAR16 Patch_fppt_80w_WName[] = { L'f', L'p', L'p', L't', L'_', L'8', L'0', L'w', 0 };
+
+static const UINT8 Patch_fppt_r9_80w_Find[] = { 0x70, 0x0A, 0x4B, 0x60 };
+static const UINT8 Patch_fppt_r9_80w_Replace[] = { 0x70, 0x0A, 0x50, 0x60 };
+
+static const CHAR16 Patch_fppt_r9_80w_WName[] = { L'f', L'p', L'p', L't', L'_', L'r', L'9', L'_', L'8', L'0', L'w', 0 };
+
+static const UINT8 Patch_tppa_unlock_Find[] = { 0x70, 0x0B, 0x68, 0x01, 0x54, 0x50, 0x50, 0x41 };
+static const UINT8 Patch_tppa_unlock_Replace[] = { 0x70, 0x0B, 0xE0, 0x01, 0x54, 0x50, 0x50, 0x41 };
+
+static const CHAR16 Patch_tppa_unlock_WName[] = { L't', L'p', L'p', L'a', L'_', L'u', L'n', L'l', L'o', L'c', L'k', 0 };
 
 static const ACPI_PATCH gPatches[] = {
     { 0x20202020324B4445ULL, Patch_atp2_unlock_Find, 8, Patch_atp2_unlock_Replace, 8, Patch_atp2_unlock_WName },
     { 0x20202020324B4445ULL, Patch_atpp_unlock_Find, 8, Patch_atpp_unlock_Replace, 8, Patch_atpp_unlock_WName },
-    { 0x20202020324B4445ULL, Patch_nce2_unlock_Find, 6, Patch_nce2_unlock_Replace, 6, Patch_nce2_unlock_WName }
+    { 0x20202020324B4445ULL, Patch_cpu_clamp_unlock_Find, 6, Patch_cpu_clamp_unlock_Replace, 6, Patch_cpu_clamp_unlock_WName },
+    { 0x20202020324B4445ULL, Patch_cpu_limit_65w_Find, 3, Patch_cpu_limit_65w_Replace, 3, Patch_cpu_limit_65w_WName },
+    { 0x20202020324B4445ULL, Patch_cspl_60w_Find, 4, Patch_cspl_60w_Replace, 4, Patch_cspl_60w_WName },
+    { 0x20202020324B4445ULL, Patch_cspl_r9_60w_Find, 4, Patch_cspl_r9_60w_Replace, 4, Patch_cspl_r9_60w_WName },
+    { 0x20202020324B4445ULL, Patch_fppt_80w_Find, 4, Patch_fppt_80w_Replace, 4, Patch_fppt_80w_WName },
+    { 0x20202020324B4445ULL, Patch_fppt_r9_80w_Find, 4, Patch_fppt_r9_80w_Replace, 4, Patch_fppt_r9_80w_WName },
+    { 0x20202020324B4445ULL, Patch_tppa_unlock_Find, 8, Patch_tppa_unlock_Replace, 8, Patch_tppa_unlock_WName }
 };
 
-static const UINTN gPatchCount = 3;
+static const UINTN gPatchCount = 9;
 
 #endif // GENERATED_PATCHES_H

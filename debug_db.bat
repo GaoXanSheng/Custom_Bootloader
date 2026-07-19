@@ -113,8 +113,15 @@ goto menu
 
 :deploy_efi
 echo.
-if not exist build\BOOTX64.efi (
-    echo [-] 错误: 在当前目录下未找到编译好的 build\BOOTX64.efi 文件！
+set "EFI_SRC="
+if exist build\BOOTX64.efi (
+    set "EFI_SRC=build\BOOTX64.efi"
+) else if exist BOOTX64.efi (
+    set "EFI_SRC=BOOTX64.efi"
+)
+
+if "%EFI_SRC%"=="" (
+    echo [-] 错误: 未在 build\ 目录或当前目录下找到编译好的 BOOTX64.efi 文件！
     echo 请先运行 build.bat 进行编译生成。
     echo.
     pause
@@ -142,7 +149,7 @@ if exist S:\EFI\BOOT\BOOTX64.efi (
 )
 
 echo [+] 正在将最新的 BOOTX64.efi 部署到 S:\EFI\BOOT\BOOTX64.efi...
-copy /Y build\BOOTX64.efi S:\EFI\BOOT\BOOTX64.efi >nul 2>&1
+copy /Y %EFI_SRC% S:\EFI\BOOT\BOOTX64.efi >nul 2>&1
 if %errorlevel% equ 0 (
     echo [+] 恭喜！最新引导文件已成功部署到 ESP 分区！
 ) else (
