@@ -1,0 +1,16 @@
+[WMI, 
+ Dynamic, 
+ Provider("WmiProv"),
+ GUID("{850C1B62-A3D9-4E65-B8D5-DE3C74C9B38D}"),
+ locale("MS\\0x409"),
+ Description("Custom DBUnlock WMI Interface")]
+class CustomDbUnlock {
+    [key, read] string InstanceName;
+    [read] boolean Active;
+
+    [WmiMethodId(1), Implemented, Description("Set DBFS Flag")]
+    void SetDbfs([in] uint32 Value, [out] uint32 Status);
+
+    [WmiMethodId(2), Implemented, Description("Read DBFS Flag")]
+    void ReadDbfs([out] uint32 Value);
+};
