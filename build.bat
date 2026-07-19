@@ -11,6 +11,14 @@ call "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\v
 :: Create output directories
 if not exist build\obj mkdir build\obj
 
+echo [+] Generating ACPI patches header...
+python tools\generate_patches.py
+if %errorlevel% neq 0 (
+    echo [-] Error: Patch header generation failed.
+    pause
+    exit /b %errorlevel%
+)
+
 echo [+] Compiling WMI MOF to BMF...
 "%SystemRoot%\System32\wbem\mofcomp.exe" -B:build\SsdtUnlockDB.bmf src\acpi\SsdtUnlockDB.mof
 if %errorlevel% neq 0 (

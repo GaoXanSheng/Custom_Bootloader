@@ -11,6 +11,7 @@ void LogToFile(EFI_SYSTEM_TABLE *SystemTable, EFI_HANDLE ImageHandle, CHAR16 *Me
     char AsciiBuffer[256];
     int i;
     UINTN WriteSize;
+    static BOOLEAN LogInitialized = FALSE;
 
     BS = SystemTable->BootServices;
 
@@ -22,6 +23,17 @@ void LogToFile(EFI_SYSTEM_TABLE *SystemTable, EFI_HANDLE ImageHandle, CHAR16 *Me
 
     Status = Volume->OpenVolume(Volume, &RootDir);
     if (EFI_ERROR(Status) || RootDir == NULL) return;
+
+    // On the very first write during boot, delete the old log file to truncate it
+    if (!LogInitialized) {
+        Status = RootDir->Open(RootDir, &LogFile, L"\\EFI\\BOOT\\unlock.log", 
+                               EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE, 0);
+        if (!EFI_ERROR(Status) && LogFile != NULL) {
+            LogFile->Delete(LogFile); // This deletes the file and automatically closes the handle
+            LogFile = NULL;
+        }
+        LogInitialized = TRUE;
+    }
 
     Status = RootDir->Open(RootDir, &LogFile, L"\\EFI\\BOOT\\unlock.log", 
                            EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE | EFI_FILE_MODE_CREATE, 0);

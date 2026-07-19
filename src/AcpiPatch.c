@@ -1,5 +1,6 @@
 #include "AcpiPatch.h"
 #include "Logging.h"
+#include "GeneratedPatches.h"
 
 #include "../build/SsdtUnlockDB.hex"
 
@@ -139,14 +140,6 @@ EFI_STATUS PatchSsdt4PowerWall(
     UINTN Index;
     BOOLEAN PatchedAny = FALSE;
 
-    static const UINT8 SearchATPP[8]  = { 0x70, 0x0B, 0x68, 0x01, 0x41, 0x54, 0x50, 0x50 };
-
-    static const UINT8 ReplaceATPP[8] = { 0x70, 0x0B, 0xE0, 0x01, 0x41, 0x54, 0x50, 0x50 };
-
-    static const UINT8 SearchATP2[8]  = { 0x70, 0x0B, 0x68, 0x01, 0x41, 0x54, 0x50, 0x32 };
-
-    static const UINT8 ReplaceATP2[8] = { 0x70, 0x0B, 0xE0, 0x01, 0x41, 0x54, 0x50, 0x32 };
-
     if (Xsdt == NULL || Xsdt->Signature != 0x54445358) { 
         LogToFile(SystemTable, ImageHandle, L"[-] Error: Invalid XSDT signature during power wall scanning.");
         return EFI_NOT_FOUND;
@@ -168,7 +161,6 @@ EFI_STATUS PatchSsdt4PowerWall(
         StatusToHex((EFI_STATUS)Table, AddrStr);
 
         if (!IsValidAcpiPointer(Table)) {
-
             UefiMemcpy(LogBuf, L"[D] Entry index ", 16 * sizeof(CHAR16));
             UefiMemcpy(LogBuf + 16, IndexStr, 18 * sizeof(CHAR16));
             UefiMemcpy(LogBuf + 34, L" points to invalid address: ", 28 * sizeof(CHAR16));
@@ -191,17 +183,25 @@ EFI_STATUS PatchSsdt4PowerWall(
         LogToFile(SystemTable, ImageHandle, LogBuf);
 
         if (Table->Signature == 0x54445353) {
+            BOOLEAN TableMatchesPatch = FALSE;
+            UINTN pIdx;
+            
+            for (pIdx = 0; pIdx < gPatchCount; pIdx++) {
+                if (Table->OemTableId == gPatches[pIdx].OemTableId) {
+                    TableMatchesPatch = TRUE;
+                    break;
+                }
+            }
 
-            if (Table->OemTableId == 0x20202020324B4445ULL) {
+            if (TableMatchesPatch) {
                 EFI_STATUS Status;
                 UINTN TableLength = Table->Length;
                 UINTN PagesNeeded = (TableLength + 4095) / 4096;
                 EFI_PHYSICAL_ADDRESS NewTableAddr = 0;
                 EFI_ACPI_SDT_HEADER *NewTable = NULL;
-                UINTN RepCount1 = 0;
-                UINTN RepCount2 = 0;
+                UINTN PatchesApplied = 0;
 
-                LogToFile(SystemTable, ImageHandle, L"[+] Matches OEM Table ID: EDK2. Allocating writable shadow memory page...");
+                LogToFile(SystemTable, ImageHandle, L"[+] Matches target OEM ID. Allocating writable shadow memory page...");
 
                 Status = BS->AllocatePages(0, 9, PagesNeeded, &NewTableAddr); 
                 if (EFI_ERROR(Status)) {
@@ -210,40 +210,52 @@ EFI_STATUS PatchSsdt4PowerWall(
                 }
 
                 NewTable = (EFI_ACPI_SDT_HEADER *)NewTableAddr;
-
                 UefiMemcpy(NewTable, Table, TableLength);
 
-                RepCount1 = SearchAndReplace((UINT8 *)NewTable, TableLength, SearchATPP, 8, ReplaceATPP, 8);
-                RepCount2 = SearchAndReplace((UINT8 *)NewTable, TableLength, SearchATP2, 8, ReplaceATP2, 8);
+                for (pIdx = 0; pIdx < gPatchCount; pIdx++) {
+                    const ACPI_PATCH *Patch = &gPatches[pIdx];
+                    if (Table->OemTableId == Patch->OemTableId) {
+                        UINTN RepCount = SearchAndReplace((UINT8 *)NewTable, TableLength, 
+                                                         Patch->Search, Patch->SearchLen, 
+                                                         Patch->Replace, Patch->ReplaceLen);
+                        if (RepCount > 0) {
+                            PatchesApplied += RepCount;
+                            
+                            CHAR16 CountStr[32];
+                            StatusToHex(RepCount, CountStr);
+                            
+                            UefiMemcpy(LogBuf, L"    [+] Patch success: ", 23 * sizeof(CHAR16));
+                            
+                            int nLen = 0;
+                            while (Patch->Name[nLen] != 0 && nLen < 50) {
+                                LogBuf[23 + nLen] = Patch->Name[nLen];
+                                nLen++;
+                            }
+                            UefiMemcpy(LogBuf + 23 + nLen, L" (count: ", 9 * sizeof(CHAR16));
+                            UefiMemcpy(LogBuf + 32 + nLen, CountStr, 18 * sizeof(CHAR16));
+                            UefiMemcpy(LogBuf + 50 + nLen, L")", 1 * sizeof(CHAR16));
+                            LogBuf[51 + nLen] = 0;
+                            LogToFile(SystemTable, ImageHandle, LogBuf);
+                        }
+                    }
+                }
 
-                if (RepCount1 > 0 || RepCount2 > 0) {
-                    CHAR16 Rep1Str[32];
-                    CHAR16 Rep2Str[32];
+                if (PatchesApplied > 0) {
                     CHAR16 NewAddrStr[32];
-
                     NewTable->Checksum = 0;
                     NewTable->Checksum = CalculateChecksum8((UINT8 *)NewTable, TableLength);
 
                     EntryPtr[Index] = (UINT64)NewTableAddr;
                     PatchedAny = TRUE;
 
-                    StatusToHex(RepCount1, Rep1Str);
-                    StatusToHex(RepCount2, Rep2Str);
                     StatusToHex((EFI_STATUS)NewTableAddr, NewAddrStr);
 
-                    UefiMemcpy(LogBuf, L"[+] Shadow patch success. Redirected pointer to: ", 49 * sizeof(CHAR16));
-                    UefiMemcpy(LogBuf + 49, NewAddrStr, 18 * sizeof(CHAR16));
-                    UefiMemcpy(LogBuf + 67, L" (ATPP count: ", 14 * sizeof(CHAR16));
-                    UefiMemcpy(LogBuf + 81, Rep1Str, 18 * sizeof(CHAR16));
-                    UefiMemcpy(LogBuf + 99, L", ATP2 count: ", 14 * sizeof(CHAR16));
-                    UefiMemcpy(LogBuf + 113, Rep2Str, 18 * sizeof(CHAR16));
-                    UefiMemcpy(LogBuf + 131, L")", 1 * sizeof(CHAR16));
-                    LogBuf[132] = 0;
+                    UefiMemcpy(LogBuf, L"[+] Redirection applied. New table address: ", 44 * sizeof(CHAR16));
+                    UefiMemcpy(LogBuf + 44, NewAddrStr, 18 * sizeof(CHAR16));
+                    LogBuf[62] = 0;
                     LogToFile(SystemTable, ImageHandle, LogBuf);
-
                 } else {
-                    LogToFile(SystemTable, ImageHandle, L"[-] Warn: No power wall patterns matched in EDK2 SSDT.");
-
+                    LogToFile(SystemTable, ImageHandle, L"[-] Warn: No patch patterns matched in SSDT.");
                     BS->FreePages(NewTableAddr, PagesNeeded);
                 }
             }
@@ -251,14 +263,12 @@ EFI_STATUS PatchSsdt4PowerWall(
     }
 
     if (PatchedAny) {
-
         Xsdt->Checksum = 0;
         Xsdt->Checksum = CalculateChecksum8((UINT8 *)Xsdt, Xsdt->Length);
-
-        LogToFile(SystemTable, ImageHandle, L"[+] 240W Global Power Wall Unlock shadow-patch applied successfully.");
+        LogToFile(SystemTable, ImageHandle, L"[+] All ACPI memory patches applied successfully.");
         return EFI_SUCCESS;
     } else {
-        LogToFile(SystemTable, ImageHandle, L"[-] Warn: Target SSDT table with ATPP/ATP2 patterns not found or already shadow-patched.");
+        LogToFile(SystemTable, ImageHandle, L"[-] Warn: No target SSDT tables with matching patch patterns were found.");
         return EFI_SUCCESS;
     }
 }

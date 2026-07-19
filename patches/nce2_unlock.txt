@@ -1,0 +1,3 @@
+table=EDK2
+find=70014E434532
+replace=70004E434532

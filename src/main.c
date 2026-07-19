@@ -22,7 +22,7 @@ EFI_STATUS EFIAPI efi_main(
         L"EFI\\Microsoft\\Boot\\bootmgfw.efi",
         L"\\EFI\\Microsoft\\Boot\\bootmgfw.efi",
     };
-    UINTN NumCandidates = 4;
+    UINTN NumCandidates = sizeof(Candidates) / sizeof(Candidates[0]);
 
     BS = SystemTable->BootServices;
 
