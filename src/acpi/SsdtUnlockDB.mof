@@ -3,14 +3,74 @@
  Provider("WmiProv"),
  GUID("{850C1B62-A3D9-4E65-B8D5-DE3C74C9B38D}"),
  locale("MS\\0x409"),
- Description("Custom DBUnlock WMI Interface")]
+ Description("Custom DBUnlock ACPI Interface (DBFS + misc EC/NPCF access; power-wall control is handled by firmware WMI/table replacement)")]
 class CustomDbUnlock {
     [key, read] string InstanceName;
     [read] boolean Active;
 
+    // ==========================================
+    // 域 1: Dynamic Boost 开关 (DBFS)
+    // ==========================================
     [WmiMethodId(1), Implemented, Description("Set DBFS Flag")]
     void SetDbfs([in] uint32 Value, [out] uint32 Status);
 
-    [WmiMethodId(2), Implemented, Description("Read DBFS Flag")]
-    void ReadDbfs([out] uint32 Value);
+    [WmiMethodId(2), Implemented, Description("Get DBFS Flag")]
+    void GetDbfs([out] uint32 Value);
+
+    [WmiMethodId(3), Implemented, Description("Get Bootloader Firmware Version")]
+    void GetVersion([out] uint32 BuildVersion);
+
+    // ==========================================
+    // 域 2: 电池健康与充电上限门限 (BBHL)
+    // ==========================================
+    [WmiMethodId(4), Implemented, Description("Set Battery Charge Limit (e.g. 60%, 80%, 100%)")]
+    void SetBatteryChargeThreshold([in] uint32 LimitPercent, [out] uint32 Status);
+
+    [WmiMethodId(5), Implemented, Description("Get Battery Charge Limit Percent")]
+    void GetBatteryChargeThreshold([out] uint32 LimitPercent);
+
+    // ==========================================
+    // 域 3: ACBT/DCBT/AMAT/AMIT 热响应门限
+    // ==========================================
+    [WmiMethodId(6), Implemented, Description("Set ACBT, DCBT, AMAT, and AMIT Thresholds")]
+    void SetThresholds([in] uint32 Acbt, [in] uint32 Dcbt, [in] uint32 Amat, [in] uint32 Amit, [out] uint32 Status);
+
+    [WmiMethodId(7), Implemented, Description("Get ACBT, DCBT, AMAT, and AMIT Thresholds")]
+    void GetThresholds([out] uint32 Acbt, [out] uint32 Dcbt, [out] uint32 Amat, [out] uint32 Amit);
+
+    // ==========================================
+    // 域 4: 原始 LPC EC 寄存器底层读写 (0x00~0xFF)
+    // ==========================================
+    [WmiMethodId(8), Implemented, Description("Set Raw EC Register Byte Value")]
+    void SetEcRegister([in] uint32 RegisterOffset, [in] uint32 WriteVal, [out] uint32 Status);
+
+    [WmiMethodId(9), Implemented, Description("Get Raw EC Register Byte Value")]
+    void GetEcRegister([in] uint32 RegisterOffset, [out] uint32 ReadVal);
+
+    // ==========================================
+    // 域 5: WMI 动态持久化覆盖锁掩码 (WMOV)
+    // ==========================================
+    [WmiMethodId(10), Implemented, Description("Set WMI Override Persistence Lock Mask")]
+    void SetOverrideLock([in] uint32 LockMask, [out] uint32 Status);
+
+    [WmiMethodId(11), Implemented, Description("Get WMI Override Persistence Lock Mask")]
+    void GetOverrideLock([out] uint32 LockMask);
+
+    // ==========================================
+    // 域 6: 软件 SMI (0xB2 Port) 命令提交与状态
+    // ==========================================
+    [WmiMethodId(12), Implemented, Description("Trigger Software SMI Command")]
+    void SetSwSmi([in] uint32 SmiCmd, [in] uint32 SmiArg, [out] uint32 Status);
+
+    [WmiMethodId(13), Implemented, Description("Get Software SMI Last Execution Status")]
+    void GetSwSmiStatus([out] uint32 Status);
+
+    // ==========================================
+    // 域 7: AMD ALIB 固件邮箱原生子例程 (AM01~AM09 直写)
+    // ==========================================
+    [WmiMethodId(14), Implemented, Description("Set AMD ALIB Mailbox Command Direct")]
+    void SetAmdAlibDirect([in] uint32 SubFunction, [in] uint32 DataParam, [out] uint32 Status);
+
+    [WmiMethodId(15), Implemented, Description("Get AMD ALIB Mailbox Return Data")]
+    void GetAmdAlibDirect([in] uint32 SubFunction, [out] uint32 ReturnVal);
 };

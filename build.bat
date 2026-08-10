@@ -11,10 +11,18 @@ call "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\v
 :: Create output directories
 if not exist build\obj mkdir build\obj
 
-echo [+] Generating ACPI patches header...
-python tools\generate_patches.py
+echo [+] Generating version header...
+python tools\generate_version.py
 if %errorlevel% neq 0 (
-    echo [-] Error: Patch header generation failed.
+    echo [-] Error: Version header generation failed.
+    pause
+    exit /b %errorlevel%
+)
+
+echo [+] Building patched ACPI tables...
+python tools\build_patched_tables.py
+if %errorlevel% neq 0 (
+    echo [-] Error: Patched ACPI table build failed.
     pause
     exit /b %errorlevel%
 )

@@ -1,8 +1,61 @@
 #include "AcpiPatch.h"
 #include "Logging.h"
-#include "GeneratedPatches.h"
 
 #include "../build/SsdtUnlockDB.hex"
+#include "../build/ssdt4_patched.hex"
+#include "../build/dsdt_patched.hex"
+
+// ---------------------------------------------------------------------------
+// Table Replacement (整表替换)
+//
+// Replaces the old runtime byte SearchAndReplace patch engine (patches/*.txt).
+// Target tables are now patched at the ASL source level, compiled offline by
+// iASL into legal AML (src/acpi/patched/*.dsl -> build/*.hex), and swapped in
+// wholesale via XSDT/FACP pointer redirection. The firmware AML is never
+// modified in place, so WMI device registration (e.g. \_SB.PCI0.WMID /
+// MICommonInterface) can no longer be broken by malformed patch bytes.
+// ---------------------------------------------------------------------------
+
+#define OEM_TABLE_ID_EDK2    0x20202020324B4445ULL   // "EDK2    " (little-endian)
+
+#define ACPI_SIG_DSDT        0x54445344              // "DSDT"
+#define ACPI_SIG_SSDT        0x54445353              // "SSDT"
+#define ACPI_SIG_FACP        0x50434146              // "FACP"
+
+typedef struct {
+    UINT32 Signature;          // Target table signature ('SSDT' / 'DSDT')
+    UINT64 OemTableId;         // Target OEM Table ID
+    UINT32 OemRevision;        // Target OEM Revision
+    const UINT8 *Fingerprint;  // Optional content fingerprint (NULL = skip)
+    UINTN FingerprintLen;
+    const UINT8 *NewTable;     // Pre-built replacement table (with ACPI header)
+    UINTN NewTableSize;
+    const CHAR16 *Name;
+} TABLE_REPLACEMENT;
+
+static const TABLE_REPLACEMENT gTableReplacements[] = {
+    {
+        ACPI_SIG_SSDT,
+        OEM_TABLE_ID_EDK2,
+        0x00001000,                          // SSDT4 (NPCF power wall)
+        (const UINT8 *)"NPCF", 4,            // content fingerprint, unique to SSDT4
+        ssdt4_patched_aml_code,
+        sizeof(ssdt4_patched_aml_code),
+        L"SSDT4_NPCF_PowerWall"
+    },
+    {
+        ACPI_SIG_DSDT,
+        OEM_TABLE_ID_EDK2,
+        0x00000002,                          // DSDT (CPU power clamp MSPL/MFPT/FNQS)
+        NULL, 0,
+        dsdt_patched_aml_code,
+        sizeof(dsdt_patched_aml_code),
+        L"DSDT_CpuPowerClamp"
+    },
+};
+
+static const UINTN gTableReplacementCount =
+    sizeof(gTableReplacements) / sizeof(gTableReplacements[0]);
 
 static void SignatureToStr(UINT32 Signature, CHAR16 *Str)
 {
@@ -13,40 +66,6 @@ static void SignatureToStr(UINT32 Signature, CHAR16 *Str)
     Str[4] = 0;
 }
 
-static UINTN SearchAndReplace(
-    UINT8 *Buffer, 
-    UINTN Size, 
-    const UINT8 *Search, 
-    UINTN SearchSize, 
-    const UINT8 *Replace, 
-    UINTN ReplaceSize
-)
-{
-    UINTN Count = 0;
-    UINTN i, j;
-
-    if (SearchSize != ReplaceSize || Size < SearchSize) {
-        return 0;
-    }
-
-    for (i = 0; i <= Size - SearchSize; i++) {
-        BOOLEAN Match = TRUE;
-        for (j = 0; j < SearchSize; j++) {
-            if (Buffer[i + j] != Search[j]) {
-                Match = FALSE;
-                break;
-            }
-        }
-        if (Match) {
-            for (j = 0; j < ReplaceSize; j++) {
-                Buffer[i + j] = Replace[j];
-            }
-            Count++;
-            i += SearchSize - 1; 
-        }
-    }
-    return Count;
-}
 
 static BOOLEAN IsValidAcpiPointer(VOID *Ptr)
 {
@@ -61,6 +80,101 @@ static BOOLEAN IsValidAcpiPointer(VOID *Ptr)
     return TRUE;
 }
 
+static BOOLEAN ContainsBytes(
+    const UINT8 *Buffer,
+    UINTN BufferSize,
+    const UINT8 *Pattern,
+    UINTN PatternSize
+)
+{
+    UINTN i, j;
+
+    if (Pattern == NULL || PatternSize == 0 || BufferSize < PatternSize) {
+        return FALSE;
+    }
+
+    for (i = 0; i <= BufferSize - PatternSize; i++) {
+        BOOLEAN Match = TRUE;
+        for (j = 0; j < PatternSize; j++) {
+            if (Buffer[i + j] != Pattern[j]) {
+                Match = FALSE;
+                break;
+            }
+        }
+        if (Match) {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+static const TABLE_REPLACEMENT *FindReplacement(
+    UINT32 Signature,
+    const EFI_ACPI_SDT_HEADER *Table
+)
+{
+    UINTN i;
+
+    for (i = 0; i < gTableReplacementCount; i++) {
+        const TABLE_REPLACEMENT *Spec = &gTableReplacements[i];
+
+        if (Spec->Signature != Signature) {
+            continue;
+        }
+        if (Table->OemTableId != Spec->OemTableId) {
+            continue;
+        }
+        if (Table->OemRevision != Spec->OemRevision) {
+            continue;
+        }
+        if (Spec->Fingerprint != NULL) {
+            if (!ContainsBytes((const UINT8 *)Table, Table->Length,
+                               Spec->Fingerprint, Spec->FingerprintLen)) {
+                continue;
+            }
+        }
+        return Spec;
+    }
+    return NULL;
+}
+
+// Copy the pre-built replacement table into ACPI Reclaim memory and point
+// *EntryPtr at it. Returns TRUE on success.
+static BOOLEAN ApplyReplacement(
+    EFI_SYSTEM_TABLE *SystemTable,
+    EFI_HANDLE ImageHandle,
+    const TABLE_REPLACEMENT *Spec,
+    UINT64 *EntryPtr,
+    const CHAR16 *LogTag
+)
+{
+    EFI_BOOT_SERVICES *BS = SystemTable->BootServices;
+    UINTN PagesNeeded;
+    EFI_PHYSICAL_ADDRESS NewTableAddr = 0;
+    EFI_ACPI_SDT_HEADER *NewTable;
+
+    PagesNeeded = (Spec->NewTableSize + 4095) / 4096;
+    if (EFI_ERROR(BS->AllocatePages(0, 9, PagesNeeded, &NewTableAddr))) {
+        LogToFile(SystemTable, ImageHandle, L"[-] Error: Failed to allocate ACPI Reclaim memory for replacement table.");
+        return FALSE;
+    }
+
+    NewTable = (EFI_ACPI_SDT_HEADER *)NewTableAddr;
+    UefiMemcpy(NewTable, Spec->NewTable, Spec->NewTableSize);
+
+    // Rebuild header checksum
+    NewTable->Checksum = 0;
+    NewTable->Checksum = CalculateChecksum8((UINT8 *)NewTable, NewTable->Length);
+
+    *EntryPtr = (UINT64)NewTableAddr;
+
+    LogToFile(SystemTable, ImageHandle, LogTag);
+    return TRUE;
+}
+
+// ---------------------------------------------------------------------------
+// InjectSsdt: append the custom DBUL WMI SSDT to the XSDT.
+// ---------------------------------------------------------------------------
 EFI_STATUS InjectSsdt(
     EFI_SYSTEM_TABLE *SystemTable,
     EFI_HANDLE ImageHandle,
@@ -75,7 +189,7 @@ EFI_STATUS InjectSsdt(
     UINT8 *InjectTableBuffer;
 
     PagesNeeded = (sizeof(ssdtunlockdb_aml_code) + 4095) / 4096;
-    Status = BS->AllocatePages(0, 9, PagesNeeded, &AllocateAddr); 
+    Status = BS->AllocatePages(0, 9, PagesNeeded, &AllocateAddr);
     if (EFI_ERROR(Status)) {
         LogToFile(SystemTable, ImageHandle, L"[-] Error: Failed to allocate ACPI Reclaim Memory for custom SSDT.");
         return Status;
@@ -93,7 +207,7 @@ EFI_STATUS InjectSsdt(
         UINT64 *NewEntryPtr = NULL;
         UINT32 RsdpLength = 0;
 
-        Status = BS->AllocatePages(0, 9, XsdtPagesNeeded, &NewXsdtAddr); 
+        Status = BS->AllocatePages(0, 9, XsdtPagesNeeded, &NewXsdtAddr);
         if (EFI_ERROR(Status)) {
             LogToFile(SystemTable, ImageHandle, L"[-] Error: Failed to allocate memory for New XSDT.");
             return Status;
@@ -127,7 +241,11 @@ EFI_STATUS InjectSsdt(
     return EFI_SUCCESS;
 }
 
-EFI_STATUS PatchSsdt4PowerWall(
+// ---------------------------------------------------------------------------
+// ReplaceAcpiTables: swap pre-built replacement tables (DSDT + SSDT4) into the
+// ACPI namespace via XSDT / FACP pointer redirection.
+// ---------------------------------------------------------------------------
+EFI_STATUS ReplaceAcpiTables(
     EFI_SYSTEM_TABLE *SystemTable,
     EFI_HANDLE ImageHandle,
     EFI_ACPI_2_0_ROOT_SYSTEM_DESCRIPTION_POINTER *Rsdp
@@ -138,17 +256,17 @@ EFI_STATUS PatchSsdt4PowerWall(
     UINTN EntryCount;
     UINT64 *EntryPtr;
     UINTN Index;
-    BOOLEAN PatchedAny = FALSE;
+    BOOLEAN ReplacedAny = FALSE;
 
-    if (Xsdt == NULL || Xsdt->Signature != 0x54445358) { 
-        LogToFile(SystemTable, ImageHandle, L"[-] Error: Invalid XSDT signature during power wall scanning.");
+    if (Xsdt == NULL || Xsdt->Signature != 0x54445358) { // "XSDT"
+        LogToFile(SystemTable, ImageHandle, L"[-] Error: Invalid XSDT signature during table replacement scan.");
         return EFI_NOT_FOUND;
     }
 
     EntryCount = (Xsdt->Length - sizeof(EFI_ACPI_SDT_HEADER)) / sizeof(UINT64);
     EntryPtr = (UINT64 *)((UINT8 *)Xsdt + sizeof(EFI_ACPI_SDT_HEADER));
 
-    LogToFile(SystemTable, ImageHandle, L"[+] Starting in-memory scan for SSDT/DSDT tables...");
+    LogToFile(SystemTable, ImageHandle, L"[+] Starting in-memory scan for tables to replace...");
 
     for (Index = 0; Index < EntryCount; Index++) {
         EFI_ACPI_SDT_HEADER *Table = (EFI_ACPI_SDT_HEADER *)(EntryPtr[Index]);
@@ -156,25 +274,19 @@ EFI_STATUS PatchSsdt4PowerWall(
         CHAR16 IndexStr[32];
         CHAR16 LogBuf[256];
         CHAR16 SigStr[5];
-
-        StatusToHex((EFI_STATUS)Index, IndexStr);
-        StatusToHex((EFI_STATUS)Table, AddrStr);
+        const TABLE_REPLACEMENT *Spec;
 
         if (!IsValidAcpiPointer(Table)) {
-            UefiMemcpy(LogBuf, L"[D] Entry index ", 16 * sizeof(CHAR16));
-            UefiMemcpy(LogBuf + 16, IndexStr, 18 * sizeof(CHAR16));
-            UefiMemcpy(LogBuf + 34, L" points to invalid address: ", 28 * sizeof(CHAR16));
-            UefiMemcpy(LogBuf + 62, AddrStr, 18 * sizeof(CHAR16));
-            LogBuf[80] = 0;
-            LogToFile(SystemTable, ImageHandle, LogBuf);
             continue;
         }
 
         SignatureToStr(Table->Signature, SigStr);
 
         UefiMemcpy(LogBuf, L"[D] Table ", 10 * sizeof(CHAR16));
+        StatusToHex((EFI_STATUS)Index, IndexStr);
         UefiMemcpy(LogBuf + 10, IndexStr, 18 * sizeof(CHAR16));
         UefiMemcpy(LogBuf + 28, L" at ", 4 * sizeof(CHAR16));
+        StatusToHex((EFI_STATUS)Table, AddrStr);
         UefiMemcpy(LogBuf + 32, AddrStr, 18 * sizeof(CHAR16));
         UefiMemcpy(LogBuf + 50, L" (Sig: ", 7 * sizeof(CHAR16));
         UefiMemcpy(LogBuf + 57, SigStr, 4 * sizeof(CHAR16));
@@ -182,210 +294,97 @@ EFI_STATUS PatchSsdt4PowerWall(
         LogBuf[62] = 0;
         LogToFile(SystemTable, ImageHandle, LogBuf);
 
-        if (Table->Signature == 0x54445353) {
-            BOOLEAN TableMatchesPatch = FALSE;
-            UINTN pIdx;
-            
-            for (pIdx = 0; pIdx < gPatchCount; pIdx++) {
-                if (Table->OemTableId == gPatches[pIdx].OemTableId) {
-                    TableMatchesPatch = TRUE;
-                    break;
-                }
+        if (Table->Signature == ACPI_SIG_SSDT) {
+            Spec = FindReplacement(ACPI_SIG_SSDT, Table);
+            if (Spec == NULL) {
+                continue;
             }
 
-            if (TableMatchesPatch) {
-                EFI_STATUS Status;
-                UINTN TableLength = Table->Length;
-                UINTN PagesNeeded = (TableLength + 4095) / 4096;
-                EFI_PHYSICAL_ADDRESS NewTableAddr = 0;
-                EFI_ACPI_SDT_HEADER *NewTable = NULL;
-                UINTN PatchesApplied = 0;
+            LogToFile(SystemTable, ImageHandle, L"[+] Matches SSDT replacement target. Swapping table...");
 
-                LogToFile(SystemTable, ImageHandle, L"[+] Matches target OEM ID. Allocating writable shadow memory page...");
-
-                Status = BS->AllocatePages(0, 9, PagesNeeded, &NewTableAddr); 
-                if (EFI_ERROR(Status)) {
-                    LogToFile(SystemTable, ImageHandle, L"[-] Error: Failed to allocate memory for SSDT shadow copy.");
-                    continue;
-                }
-
-                NewTable = (EFI_ACPI_SDT_HEADER *)NewTableAddr;
-                UefiMemcpy(NewTable, Table, TableLength);
-
-                for (pIdx = 0; pIdx < gPatchCount; pIdx++) {
-                    const ACPI_PATCH *Patch = &gPatches[pIdx];
-                    if (Table->OemTableId == Patch->OemTableId) {
-                        UINTN RepCount = SearchAndReplace((UINT8 *)NewTable, TableLength, 
-                                                         Patch->Search, Patch->SearchLen, 
-                                                         Patch->Replace, Patch->ReplaceLen);
-                        if (RepCount > 0) {
-                            PatchesApplied += RepCount;
-                            
-                            CHAR16 CountStr[32];
-                            StatusToHex(RepCount, CountStr);
-                            
-                            UefiMemcpy(LogBuf, L"    [+] SSDT Patch success: ", 28 * sizeof(CHAR16));
-                            
-                            int nLen = 0;
-                            while (Patch->Name[nLen] != 0 && nLen < 50) {
-                                LogBuf[28 + nLen] = Patch->Name[nLen];
-                                nLen++;
-                            }
-                            UefiMemcpy(LogBuf + 28 + nLen, L" (count: ", 9 * sizeof(CHAR16));
-                            UefiMemcpy(LogBuf + 37 + nLen, CountStr, 18 * sizeof(CHAR16));
-                            UefiMemcpy(LogBuf + 55 + nLen, L")", 1 * sizeof(CHAR16));
-                            LogBuf[56 + nLen] = 0;
-                            LogToFile(SystemTable, ImageHandle, LogBuf);
-                        }
-                    }
-                }
-
-                if (PatchesApplied > 0) {
-                    CHAR16 NewAddrStr[32];
-                    NewTable->Checksum = 0;
-                    NewTable->Checksum = CalculateChecksum8((UINT8 *)NewTable, TableLength);
-
-                    EntryPtr[Index] = (UINT64)NewTableAddr;
-                    PatchedAny = TRUE;
-
-                    StatusToHex((EFI_STATUS)NewTableAddr, NewAddrStr);
-
-                    UefiMemcpy(LogBuf, L"[+] Redirection applied. New table address: ", 44 * sizeof(CHAR16));
-                    UefiMemcpy(LogBuf + 44, NewAddrStr, 18 * sizeof(CHAR16));
-                    LogBuf[62] = 0;
-                    LogToFile(SystemTable, ImageHandle, LogBuf);
-                } else {
-                    LogToFile(SystemTable, ImageHandle, L"[-] Warn: No patch patterns matched in SSDT.");
-                    BS->FreePages(NewTableAddr, PagesNeeded);
-                }
+            if (ApplyReplacement(SystemTable, ImageHandle, Spec,
+                                 &EntryPtr[Index], Spec->Name)) {
+                ReplacedAny = TRUE;
             }
         }
-        else if (Table->Signature == 0x50434146) { // "FACP"
-            EFI_STATUS Status;
-            UINTN TableLength = Table->Length;
-            UINTN PagesNeeded = (TableLength + 4095) / 4096;
-            EFI_PHYSICAL_ADDRESS NewTableAddr = 0;
-            EFI_ACPI_SDT_HEADER *NewTable = NULL;
+        else if (Table->Signature == ACPI_SIG_FACP) {
+            // DSDT is referenced from FACP, not from the XSDT directly.
+            EFI_ACPI_SDT_HEADER *NewFacp = NULL;
+            EFI_PHYSICAL_ADDRESS NewFacpAddr = 0;
+            UINTN FacpPagesNeeded;
+            UINT64 *XDsdtPtr;
+            UINT32 *DsdtPtr;
+            UINT64 DsdtPhysicalAddress;
+            BOOLEAN DsdtReplaced = FALSE;
 
-            LogToFile(SystemTable, ImageHandle, L"[+] Matches FACP table. Allocating writable shadow memory page...");
-
-            Status = BS->AllocatePages(0, 9, PagesNeeded, &NewTableAddr); 
-            if (EFI_ERROR(Status)) {
+            FacpPagesNeeded = (Table->Length + 4095) / 4096;
+            if (EFI_ERROR(BS->AllocatePages(0, 9, FacpPagesNeeded, &NewFacpAddr))) {
                 LogToFile(SystemTable, ImageHandle, L"[-] Error: Failed to allocate memory for FACP shadow copy.");
                 continue;
             }
 
-            NewTable = (EFI_ACPI_SDT_HEADER *)NewTableAddr;
-            UefiMemcpy(NewTable, Table, TableLength);
+            NewFacp = (EFI_ACPI_SDT_HEADER *)NewFacpAddr;
+            UefiMemcpy(NewFacp, Table, Table->Length);
 
-            UINT64 *XDsdtPtr = (UINT64 *)((UINT8 *)NewTable + 140);
-            UINT32 *DsdtPtr = (UINT32 *)((UINT8 *)NewTable + 40);
-            UINT64 DsdtPhysicalAddress = *XDsdtPtr;
+            XDsdtPtr = (UINT64 *)((UINT8 *)NewFacp + 140);
+            DsdtPtr = (UINT32 *)((UINT8 *)NewFacp + 40);
+            DsdtPhysicalAddress = *XDsdtPtr;
             if (DsdtPhysicalAddress == 0) {
                 DsdtPhysicalAddress = *DsdtPtr;
             }
 
-            BOOLEAN DsdtPatched = FALSE;
-
             if (DsdtPhysicalAddress != 0) {
                 EFI_ACPI_SDT_HEADER *DsdtTable = (EFI_ACPI_SDT_HEADER *)DsdtPhysicalAddress;
-                if (IsValidAcpiPointer(DsdtTable) && DsdtTable->Signature == 0x54445344) { // "DSDT"
-                    UINTN DsdtLength = DsdtTable->Length;
-                    UINTN DsdtPagesNeeded = (DsdtLength + 4095) / 4096;
-                    EFI_PHYSICAL_ADDRESS NewDsdtAddr = 0;
-                    EFI_ACPI_SDT_HEADER *NewDsdt = NULL;
-                    UINTN DsdtPatchesApplied = 0;
 
-                    LogToFile(SystemTable, ImageHandle, L"[+] Found valid DSDT table from FACP. Allocating writable shadow memory page...");
+                if (IsValidAcpiPointer(DsdtTable) && DsdtTable->Signature == ACPI_SIG_DSDT) {
+                    Spec = FindReplacement(ACPI_SIG_DSDT, DsdtTable);
+                    if (Spec != NULL) {
+                        UINTN DsdtPagesNeeded;
+                        EFI_PHYSICAL_ADDRESS NewDsdtAddr = 0;
+                        EFI_ACPI_SDT_HEADER *NewDsdt;
 
-                    Status = BS->AllocatePages(0, 9, DsdtPagesNeeded, &NewDsdtAddr);
-                    if (!EFI_ERROR(Status)) {
-                        NewDsdt = (EFI_ACPI_SDT_HEADER *)NewDsdtAddr;
-                        UefiMemcpy(NewDsdt, DsdtTable, DsdtLength);
+                        LogToFile(SystemTable, ImageHandle, L"[+] Matches DSDT replacement target. Swapping table...");
 
-                        UINTN pIdx;
-                        for (pIdx = 0; pIdx < gPatchCount; pIdx++) {
-                            const ACPI_PATCH *Patch = &gPatches[pIdx];
-                            if (NewDsdt->OemTableId == Patch->OemTableId) {
-                                UINTN RepCount = SearchAndReplace((UINT8 *)NewDsdt, DsdtLength, 
-                                                                 Patch->Search, Patch->SearchLen, 
-                                                                 Patch->Replace, Patch->ReplaceLen);
-                                if (RepCount > 0) {
-                                    DsdtPatchesApplied += RepCount;
+                        DsdtPagesNeeded = (Spec->NewTableSize + 4095) / 4096;
+                        if (EFI_ERROR(BS->AllocatePages(0, 9, DsdtPagesNeeded, &NewDsdtAddr))) {
+                            LogToFile(SystemTable, ImageHandle, L"[-] Error: Failed to allocate memory for new DSDT.");
+                        } else {
+                            NewDsdt = (EFI_ACPI_SDT_HEADER *)NewDsdtAddr;
+                            UefiMemcpy(NewDsdt, Spec->NewTable, Spec->NewTableSize);
 
-                                    CHAR16 CountStr[32];
-                                    StatusToHex(RepCount, CountStr);
-
-                                    UefiMemcpy(LogBuf, L"    [+] DSDT Patch success: ", 28 * sizeof(CHAR16));
-
-                                    int nLen = 0;
-                                    while (Patch->Name[nLen] != 0 && nLen < 50) {
-                                        LogBuf[28 + nLen] = Patch->Name[nLen];
-                                        nLen++;
-                                    }
-                                    UefiMemcpy(LogBuf + 28 + nLen, L" (count: ", 9 * sizeof(CHAR16));
-                                    UefiMemcpy(LogBuf + 37 + nLen, CountStr, 18 * sizeof(CHAR16));
-                                    UefiMemcpy(LogBuf + 55 + nLen, L")", 1 * sizeof(CHAR16));
-                                    LogBuf[56 + nLen] = 0;
-                                    LogToFile(SystemTable, ImageHandle, LogBuf);
-                                }
-                            }
-                        }
-
-                        if (DsdtPatchesApplied > 0) {
-                            CHAR16 NewDsdtAddrStr[32];
                             NewDsdt->Checksum = 0;
-                            NewDsdt->Checksum = CalculateChecksum8((UINT8 *)NewDsdt, DsdtLength);
+                            NewDsdt->Checksum = CalculateChecksum8((UINT8 *)NewDsdt, NewDsdt->Length);
 
                             *XDsdtPtr = (UINT64)NewDsdtAddr;
                             if (DsdtPhysicalAddress <= 0xFFFFFFFF) {
                                 *DsdtPtr = (UINT32)NewDsdtAddr;
                             }
 
-                            DsdtPatched = TRUE;
-                            PatchedAny = TRUE;
-
-                            StatusToHex((EFI_STATUS)NewDsdtAddr, NewDsdtAddrStr);
-                            UefiMemcpy(LogBuf, L"[+] DSDT redirection applied. New DSDT address: ", 48 * sizeof(CHAR16));
-                            UefiMemcpy(LogBuf + 48, NewDsdtAddrStr, 18 * sizeof(CHAR16));
-                            LogBuf[66] = 0;
-                            LogToFile(SystemTable, ImageHandle, LogBuf);
-                        } else {
-                            LogToFile(SystemTable, ImageHandle, L"[-] Warn: No patch patterns matched in DSDT.");
-                            BS->FreePages(NewDsdtAddr, DsdtPagesNeeded);
+                            LogToFile(SystemTable, ImageHandle, Spec->Name);
+                            DsdtReplaced = TRUE;
+                            ReplacedAny = TRUE;
                         }
-                    } else {
-                        LogToFile(SystemTable, ImageHandle, L"[-] Error: Failed to allocate memory for DSDT shadow copy.");
                     }
                 }
             }
 
-            if (DsdtPatched) {
-                CHAR16 NewAddrStr[32];
-                NewTable->Checksum = 0;
-                NewTable->Checksum = CalculateChecksum8((UINT8 *)NewTable, TableLength);
-
-                EntryPtr[Index] = (UINT64)NewTableAddr;
-
-                StatusToHex((EFI_STATUS)NewTableAddr, NewAddrStr);
-
-                UefiMemcpy(LogBuf, L"[+] FACP redirection applied. New FACP address: ", 48 * sizeof(CHAR16));
-                UefiMemcpy(LogBuf + 48, NewAddrStr, 18 * sizeof(CHAR16));
-                LogBuf[66] = 0;
-                LogToFile(SystemTable, ImageHandle, LogBuf);
+            if (DsdtReplaced) {
+                NewFacp->Checksum = 0;
+                NewFacp->Checksum = CalculateChecksum8((UINT8 *)NewFacp, NewFacp->Length);
+                EntryPtr[Index] = (UINT64)NewFacpAddr;
             } else {
-                BS->FreePages(NewTableAddr, PagesNeeded);
+                BS->FreePages(NewFacpAddr, FacpPagesNeeded);
             }
         }
     }
 
-    if (PatchedAny) {
+    if (ReplacedAny) {
         Xsdt->Checksum = 0;
         Xsdt->Checksum = CalculateChecksum8((UINT8 *)Xsdt, Xsdt->Length);
-        LogToFile(SystemTable, ImageHandle, L"[+] All ACPI memory patches applied successfully.");
-        return EFI_SUCCESS;
-    } else {
-        LogToFile(SystemTable, ImageHandle, L"[-] Warn: No target SSDT/DSDT tables with matching patch patterns were found.");
+        LogToFile(SystemTable, ImageHandle, L"[+] All ACPI table replacements applied successfully.");
         return EFI_SUCCESS;
     }
+
+    LogToFile(SystemTable, ImageHandle, L"[-] Warn: No target tables matched for replacement.");
+    return EFI_SUCCESS;
 }

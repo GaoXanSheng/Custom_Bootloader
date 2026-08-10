@@ -4,6 +4,15 @@ build/
 # Editor / IDE
 .vs/
 .vscode/
+.idea/
 *.swp
 *.swo
 *~
+
+# Reasonix agent workspace
+.reasonix/
+
+# Auto-generated at build time (see tools/generate_version.py)
+version.txt
+src/Version.h
+src/acpi/VersionData.asl

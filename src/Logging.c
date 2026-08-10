@@ -1,6 +1,6 @@
 #include "Logging.h"
 
-void LogToFile(EFI_SYSTEM_TABLE *SystemTable, EFI_HANDLE ImageHandle, CHAR16 *Message)
+void LogToFile(EFI_SYSTEM_TABLE *SystemTable, EFI_HANDLE ImageHandle, const CHAR16 *Message)
 {
     EFI_STATUS Status;
     EFI_BOOT_SERVICES *BS;

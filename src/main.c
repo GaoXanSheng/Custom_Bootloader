@@ -57,11 +57,11 @@ EFI_STATUS EFIAPI efi_main(
     }
     SystemTable->ConOut->OutputString(SystemTable->ConOut, L"[+] Custom SSDT injected successfully.\r\n");
 
-    Status = PatchSsdt4PowerWall(SystemTable, ImageHandle, Rsdp);
+    Status = ReplaceAcpiTables(SystemTable, ImageHandle, Rsdp);
     if (EFI_ERROR(Status)) {
-        SystemTable->ConOut->OutputString(SystemTable->ConOut, L"[-] Warning: Power wall patch failed to execute.\r\n");
+        SystemTable->ConOut->OutputString(SystemTable->ConOut, L"[-] Warning: ACPI table replacement failed to execute.\r\n");
     } else {
-        SystemTable->ConOut->OutputString(SystemTable->ConOut, L"[+] Power wall patch logic evaluated.\r\n");
+        SystemTable->ConOut->OutputString(SystemTable->ConOut, L"[+] ACPI table replacement logic evaluated.\r\n");
     }
 
     SystemTable->ConOut->OutputString(SystemTable->ConOut, L"[+] Chainloading Windows Boot Manager from ESP...\r\n");

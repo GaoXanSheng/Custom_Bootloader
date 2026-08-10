@@ -1,3 +1,0 @@
-table=EDK2
-find=700A4160
-replace=700A5060

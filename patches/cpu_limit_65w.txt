@@ -1,3 +1,0 @@
-table=EDK2
-find=0BC8AF
-replace=0BFFFF
