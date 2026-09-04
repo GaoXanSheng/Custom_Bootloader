@@ -31,12 +31,12 @@ SSDT4_EDITS = [
     (1263, "                                    ATPP = 0x0168", "                                    ATPP = 0x01B8"),
     (1292, "                                    ATPP = 0x0168", "                                    ATPP = 0x01B8"),
     (1293, "                                    ATP2 = 0x0168", "                                    ATP2 = 0x01B8"),
-    # Fix Turbo mode (Else) in dGPU mode: disable Dynamic Boost clamp, assign 140W GPU + 100W CPU, use ATPP wall
-    (1284, "                                    DBAC = One", "                                    DBAC = Zero\n                                    TGPA = 0x0118\n                                    MIGA = Zero\n                                    MAGA = 0xC8"),
-    (1285, "                                    TPPA = 0x0168", "                                    TPPA = ATPP"),
-    # Fix Turbo mode (Else) in Hybrid mode: disable Dynamic Boost clamp, assign 140W GPU + 100W CPU, use ATP2 wall
-    (1314, "                                    DBAC = One", "                                    DBAC = Zero\n                                    TGPA = 0x0118\n                                    MIGA = Zero\n                                    MAGA = 0xC8"),
-    (1315, "                                    TPPA = 0x0168", "                                    TPPA = ATP2"),
+    # Fix Turbo mode (Else) in dGPU mode: DBAC=0 (unlock GPU to platform ceiling) + TPPA=220W (0x1B8)
+    (1284, "                                    DBAC = One", "                                    DBAC = Zero"),
+    (1285, "                                    TPPA = 0x0168", "                                    TPPA = 0x01B8"),
+    # Fix Turbo mode (Else) in Hybrid mode: DBAC=0 + TPPA=220W
+    (1314, "                                    DBAC = One", "                                    DBAC = Zero"),
+    (1315, "                                    TPPA = 0x0168", "                                    TPPA = 0x01B8"),
     # Neutralize NVPCF sub-func#6 Case(One): disables CPUC NVIO write AND all 16-core 0x85 throttle notifications
     (1493, "                                If ((IOBS != Zero))", "                                If (Zero)"),
 ]
@@ -48,47 +48,33 @@ DSDT_EDITS = []
 #   - Arg0 == 0 (Office/Quiet): Dispatch balanced profile THMD(0x14) (55W/65W)
 #   - Arg0 == 1 or 2 (Game/Turbo): Dispatch unlocked full-power profile THMD(Zero) (100W/105W/120W)
 # FNQS + MSPL + MFPT replacement:
-# Immunized against battery-borrowing events:
-# - Checks (ECWR & 1) OR adapter wattage ((AWHG << 8) + AWLW > 50W).
-#   When plugged into a 240W/280W adapter, battery borrowing transiently clears ECWR bit 0,
-#   which previously triggered the 35W battery profile THMD(0x03).
-#   With adapter wattage detection, AC full-power is safely maintained during dual-load borrowing!
+# Unconditional performance mode:
+# - FNQS never calls THMD(0x03) (which caused the 35W/40W throttling during battery borrowing).
+#   It always pushes THMD(Zero) (or 0x14 in Quiet mode), followed by MSPL() and MFPT().
+# - MSPL / MFPT unconditionally clamp floor values: CSPL >= 80W (0x50), FPPT >= 110W (0x6E).
+#   No software or EC event can ever set CPU power below 80W.
 FNQS_MSPL_MFPT_NEW_BODY = (
     "                    Method (FNQS, 1, Serialized)\n"
     "                    {\n"
-    "                        Local1 = (ECRD (RefOf (AWHG)) << 0x08)\n"
-    "                        Local1 += ECRD (RefOf (AWLW))\n"
-    "                        If (((ECRD (RefOf (ECWR)) & One) || (Local1 > 0x32)))\n"
+    "                        If ((ToInteger (Arg0) == Zero))\n"
     "                        {\n"
-    "                            If ((ToInteger (Arg0) == Zero))\n"
-    "                            {\n"
-    "                                THMD (0x14)\n"
-    "                            }\n"
-    "                            Else\n"
-    "                            {\n"
-    "                                THMD (Zero)\n"
-    "                            }\n"
-    "\n"
-    "                            MSPL ()\n"
-    "                            MFPT ()\n"
+    "                            THMD (0x14)\n"
     "                        }\n"
     "                        Else\n"
     "                        {\n"
-    "                            THMD (0x03)\n"
+    "                            THMD (Zero)\n"
     "                        }\n"
+    "\n"
+    "                        MSPL ()\n"
+    "                        MFPT ()\n"
     "                    }\n"
     "\n"
     "                    Method (MSPL, 0, Serialized)\n"
     "                    {\n"
     "                        Local0 = ECRD (RefOf (CSPL))\n"
-    "                        Local1 = (ECRD (RefOf (AWHG)) << 0x08)\n"
-    "                        Local1 += ECRD (RefOf (AWLW))\n"
-    "                        If (((ECRD (RefOf (ECWR)) & One) || (Local1 > 0x32)))\n"
+    "                        If ((Local0 < 0x50))\n"
     "                        {\n"
-    "                            If ((Local0 < 0x50))\n"
-    "                            {\n"
-    "                                Local0 = 0x50\n"
-    "                            }\n"
+    "                            Local0 = 0x50\n"
     "                        }\n"
     "\n"
     "                        Local0 *= 0x03E8\n"
@@ -100,14 +86,9 @@ FNQS_MSPL_MFPT_NEW_BODY = (
     "                    Method (MFPT, 0, Serialized)\n"
     "                    {\n"
     "                        Local0 = ECRD (RefOf (FPPT))\n"
-    "                        Local1 = (ECRD (RefOf (AWHG)) << 0x08)\n"
-    "                        Local1 += ECRD (RefOf (AWLW))\n"
-    "                        If (((ECRD (RefOf (ECWR)) & One) || (Local1 > 0x32)))\n"
+    "                        If ((Local0 < 0x6E))\n"
     "                        {\n"
-    "                            If ((Local0 < 0x6E))\n"
-    "                            {\n"
-    "                                Local0 = 0x6E\n"
-    "                            }\n"
+    "                            Local0 = 0x6E\n"
     "                        }\n"
     "\n"
     "                        Local0 *= 0x03E8\n"
@@ -115,32 +96,16 @@ FNQS_MSPL_MFPT_NEW_BODY = (
     "                    }\n"
 )
 
-# _Q10 replacement: AC/battery transition handler with battery-borrowing immunity
+# _Q10 replacement: AC/battery transition handler
+# Streamlined to never tamper with ITSM or trigger throttling profiles
 _Q10_NEW_BODY = (
     "                    Method (_Q10, 0, NotSerialized)  // _Qxx: EC Query, xx=0x00-0xFF\n"
     "                    {\n"
     "                        Sleep (0x012C)\n"
     "                        Notify (BAT0, 0x80) // Status Change\n"
     "                        Notify (ADP1, 0x80) // Status Change\n"
-    "                        Local1 = (ECRD (RefOf (AWHG)) << 0x08)\n"
-    "                        Local1 += ECRD (RefOf (AWLW))\n"
-    "                        If (((ECRD (RefOf (ECWR)) & One) || (Local1 > 0x32)))\n"
-    "                        {\n"
-    "                            Local0 = ECRD (RefOf (ITSM))\n"
-    "                            FNQS (Local0)\n"
-    "                        }\n"
-    "                        Else\n"
-    "                        {\n"
-    "                            If ((ECRD (RefOf (CMEN)) == One))\n"
-    "                            { \n"
-    "                                ECWT (Zero, RefOf (CMEN))\n"
-    "                            }\n"
-    "\n"
-    "                            Local0 = ECRD (RefOf (ITSM))\n"
-    "                            FNQS (Local0)\n"
-    "                        }\n"
-    "\n"
     "                        Local0 = ECRD (RefOf (ITSM))\n"
+    "                        FNQS (Local0)\n"
     "                        ^^^WMID.EVBU [Zero] = One\n"
     "                        ^^^WMID.EVBU [One] = 0x0F\n"
     "                        ^^^WMID.EVBU [0x02] = Local0\n"
@@ -149,45 +114,12 @@ _Q10_NEW_BODY = (
 )
 
 # ADP1._PSR replacement:
-# Accurately reports AC connected if ECWR bit 0 is set OR adapter wattage > 50W.
-# When a 280W adapter is plugged in, dual-load borrowing will never drop Windows to DC mode!
-# Completely omits ^^PCI0.GP17.VGA.AFN4 (0x02) to prevent GPU 40W clock clamping.
+# Unconditionally returns 1 (AC mode) to completely prevent Windows and AMD SMU ALIB(1)
+# from entering DC throttling states during dual-burn battery-borrowing spikes.
 ADP1_PSR_NEW_BODY = (
     "                        Method (_PSR, 0, NotSerialized)  // _PSR: Power Source\n"
     "                        {\n"
-    "                            Local1 = (^^PCI0.LPC0.H_EC.ECRD (RefOf (^^PCI0.LPC0.H_EC.AWHG)) << 0x08)\n"
-    "                            Local1 += ^^PCI0.LPC0.H_EC.ECRD (RefOf (^^PCI0.LPC0.H_EC.AWLW))\n"
-    "                            If (((^^PCI0.LPC0.H_EC.ECRD (RefOf (^^PCI0.LPC0.H_EC.ECWR)) & One) || (Local1 > 0x32)))\n"
-    "                            {\n"
-    "                                Local0 = One\n"
-    "                            }\n"
-    "                            Else\n"
-    "                            {\n"
-    "                                Local0 = Zero\n"
-    "                            }\n"
-    "\n"
-    "                            If (((Local0 != ACDC) || (ACDC == 0xFF)))\n"
-    "                            {\n"
-    "                                CreateWordField (XX00, Zero, SSZE)\n"
-    "                                CreateByteField (XX00, 0x02, ACST)\n"
-    "                                SSZE = 0x03\n"
-    "                                ACDC = Local0\n"
-    "                                If (ACDC)\n"
-    "                                {\n"
-    "                                    P80H = 0xECAC\n"
-    "                                    ^^PCI0.GP17.VGA.AFN4 (One)\n"
-    "                                    ACST = Zero\n"
-    "                                }\n"
-    "                                Else\n"
-    "                                {\n"
-    "                                    P80H = 0xECDC\n"
-    "                                    ACST = One\n"
-    "                                }\n"
-    "\n"
-    "                                ALIB (One, XX00)\n"
-    "                            }\n"
-    "\n"
-    "                            Return (Local0)\n"
+    "                            Return (One)\n"
     "                        }\n"
 )
 

@@ -1282,10 +1282,7 @@ DefinitionBlock ("", "SSDT", 1, "INSYDE", "EDK2    ", 0x00001000)
                                 Else
                                 {
                                     DBAC = Zero
-                                    TGPA = 0x0118
-                                    MIGA = Zero
-                                    MAGA = 0xC8
-                                    TPPA = ATPP
+                                    TPPA = 0x01B8
                                 }
                             }
                             Else
@@ -1315,10 +1312,7 @@ DefinitionBlock ("", "SSDT", 1, "INSYDE", "EDK2    ", 0x00001000)
                                 Else
                                 {
                                     DBAC = Zero
-                                    TGPA = 0x0118
-                                    MIGA = Zero
-                                    MAGA = 0xC8
-                                    TPPA = ATP2
+                                    TPPA = 0x01B8
                                 }
                             }
 
