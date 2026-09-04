@@ -340,16 +340,23 @@ DefinitionBlock ("", "SSDT", 2, "CUSTOM", "DBUNLOCK", 0x00002000)
                     \_SB.PCI0.LPC0.H_EC.ECWT (One, RefOf (\_SB.PCI0.LPC0.H_EC.GPMD))
                 }
 
-                // CPU PL1/PL2 初始化配置 (CSPL=100W, FPPT=140W) 并推送 SMU
+                // DCBT (电池取电门限) 提升至 80W (0x50)，彻底解除 40W 锁
+                If (CondRefOf (\_SB.NPCF.DCBT))
+                {
+                    Store (0x50, \_SB.NPCF.DCBT)
+                }
+
+                // CPU PL1/PL2 初始化配置 (CSPL=85W, FPPT=110W) 并推送 SMU
+                // 85W CPU + 140W GPU + 30W 外围 = 255W，完美匹配 280W 适配器，防止整机峰值拉爆导致过流借电
                 If (CondRefOf (\_SB.PCI0.LPC0.H_EC.ECWT))
                 {
-                    \_SB.PCI0.LPC0.H_EC.ECWT (0x64, RefOf (\_SB.PCI0.LPC0.H_EC.CSPL))
+                    \_SB.PCI0.LPC0.H_EC.ECWT (0x55, RefOf (\_SB.PCI0.LPC0.H_EC.CSPL))
                     If (CondRefOf (\_SB.PCI0.LPC0.H_EC.MSPL))
                     {
                         \_SB.PCI0.LPC0.H_EC.MSPL ()
                     }
 
-                    \_SB.PCI0.LPC0.H_EC.ECWT (0x8C, RefOf (\_SB.PCI0.LPC0.H_EC.FPPT))
+                    \_SB.PCI0.LPC0.H_EC.ECWT (0x6E, RefOf (\_SB.PCI0.LPC0.H_EC.FPPT))
                     If (CondRefOf (\_SB.PCI0.LPC0.H_EC.MFPT))
                     {
                         \_SB.PCI0.LPC0.H_EC.MFPT ()

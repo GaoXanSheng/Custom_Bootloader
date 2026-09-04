@@ -27,6 +27,8 @@ SSDT4_EDITS = [
     (1161, "            Name (CNPL, 0x10)", "            Name (CNPL, 0x36)"),
     # DTPP 120W (0xF0) -> 130W (0x0104)
     (1155, "            Name (DTPP, 0xF0)", "            Name (DTPP, 0x0104)"),
+    # DCBT 40W (0x28) -> 80W (0x50): lifts the DC/battery-borrowing power threshold
+    (1148, "            Name (DCBT, 0x28)", "            Name (DCBT, 0x50)"),
     # Raise AC platform power walls: 180W (0x168) -> 220W (0x1B8)
     (1263, "                                    ATPP = 0x0168", "                                    ATPP = 0x01B8"),
     (1292, "                                    ATPP = 0x0168", "                                    ATPP = 0x01B8"),

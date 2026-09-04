@@ -1145,7 +1145,7 @@ DefinitionBlock ("", "SSDT", 1, "INSYDE", "EDK2    ", 0x00001000)
         Device (NPCF)
         {
             Name (ACBT, 0x50)
-            Name (DCBT, 0x28)
+            Name (DCBT, 0x50)
             Name (DBAC, Zero)
             Name (DBDC, Zero)
             Name (AMAT, 0x78)
