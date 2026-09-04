@@ -1150,9 +1150,9 @@ DefinitionBlock ("", "SSDT", 1, "INSYDE", "EDK2    ", 0x00001000)
             Name (DBDC, Zero)
             Name (AMAT, 0x78)
             Name (AMIT, 0xFF88)
-            Name (ATPP, 0x01B8)
+            Name (ATPP, 0x01E0)
             Name (ATP2, 0x0208)
-            Name (DTPP, 0xF0)
+            Name (DTPP, 0x0104)
             Name (TPPL, Zero)
             Name (DROS, Zero)
             Name (HPCT, 0x02)
@@ -1260,7 +1260,7 @@ DefinitionBlock ("", "SSDT", 1, "INSYDE", "EDK2    ", 0x00001000)
                             {
                                 If ((\_SB.PCI0.LPC0.H_EC.ECRD (RefOf (\_SB.PCI0.LPC0.H_EC.CPUT)) == 0x07))
                                 {
-                                    ATPP = 0x01E0
+                                    ATPP = 0x01B8
                                 }
 
                                 If ((\_SB.PCI0.LPC0.H_EC.ECRD (RefOf (\_SB.PCI0.LPC0.H_EC.ITSM)) == One))
@@ -1268,29 +1268,30 @@ DefinitionBlock ("", "SSDT", 1, "INSYDE", "EDK2    ", 0x00001000)
                                     DBAC = Zero
                                     TGPA = 0x0118
                                     MIGA = Zero
-                                    MAGA = Zero
+                                    MAGA = 0xC8
                                     TPPA = ATPP /* \_SB_.NPCF.ATPP */
                                 }
                                 ElseIf ((\_SB.PCI0.LPC0.H_EC.ECRD (RefOf (\_SB.PCI0.LPC0.H_EC.ITSM)) == Zero))
                                 {
                                     DBAC = Zero
-                                    TGPA = 0x78
+                                    TGPA = 0x8C
                                     MIGA = Zero
-                                    MAGA = Zero
+                                    MAGA = 0xC8
                                     TPPA = ATPP /* \_SB_.NPCF.ATPP */
                                 }
                                 Else
                                 {
-                                    DBAC = One
-                                    TPPA = 0x0230
+                                    DBAC = Zero
+                                    TGPA = 0x64
+                                    TPPA = 0x01B8
                                 }
                             }
                             Else
                             {
                                 If ((\_SB.PCI0.LPC0.H_EC.ECRD (RefOf (\_SB.PCI0.LPC0.H_EC.CPUT)) == 0x07))
                                 {
-                                    ATPP = 0x01E0
-                                    ATP2 = 0x01E0
+                                    ATPP = 0x01B8
+                                    ATP2 = 0x01B8
                                 }
 
                                 If ((\_SB.PCI0.LPC0.H_EC.ECRD (RefOf (\_SB.PCI0.LPC0.H_EC.ITSM)) == One))
@@ -1298,21 +1299,22 @@ DefinitionBlock ("", "SSDT", 1, "INSYDE", "EDK2    ", 0x00001000)
                                     DBAC = Zero
                                     TGPA = 0x0118
                                     MIGA = Zero
-                                    MAGA = Zero
+                                    MAGA = 0xC8
                                     TPPA = ATP2 /* \_SB_.NPCF.ATP2 */
                                 }
                                 ElseIf ((\_SB.PCI0.LPC0.H_EC.ECRD (RefOf (\_SB.PCI0.LPC0.H_EC.ITSM)) == Zero))
                                 {
                                     DBAC = Zero
-                                    TGPA = 0x78
+                                    TGPA = 0x8C
                                     MIGA = Zero
-                                    MAGA = Zero
+                                    MAGA = 0xC8
                                     TPPA = ATPP /* \_SB_.NPCF.ATPP */
                                 }
                                 Else
                                 {
-                                    DBAC = One
-                                    TPPA = 0x0230
+                                    DBAC = Zero
+                                    TGPA = 0x64
+                                    TPPA = 0x01B8
                                 }
                             }
 

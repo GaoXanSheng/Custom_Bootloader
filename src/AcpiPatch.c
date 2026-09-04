@@ -1,19 +1,31 @@
 #include "AcpiPatch.h"
 #include "Logging.h"
+#include "InplacePatches.h"
 
 #include "../build/SsdtUnlockDB.hex"
 #include "../build/ssdt4_patched.hex"
 #include "../build/dsdt_patched.hex"
 
 // ---------------------------------------------------------------------------
-// Table Replacement (整表替换)
+// Dual-channel ACPI patching
 //
-// Replaces the old runtime byte SearchAndReplace patch engine (patches/*.txt).
-// Target tables are now patched at the ASL source level, compiled offline by
-// iASL into legal AML (src/acpi/patched/*.dsl -> build/*.hex), and swapped in
-// wholesale via XSDT/FACP pointer redirection. The firmware AML is never
-// modified in place, so WMI device registration (e.g. \_SB.PCI0.WMID /
-// MICommonInterface) can no longer be broken by malformed patch bytes.
+// 1) Table Replacement (整表替换, ReplaceAcpiTables): target tables are
+//    patched at the ASL source level, compiled offline by iASL into legal AML
+//    (src/acpi/patched/*.dsl -> build/*.hex), and swapped in wholesale via
+//    XSDT/FACP pointer redirection. Consumers that re-read the tables from
+//    RSDP at boot (Windows ACPICA) see the new tables; the firmware AML is
+//    never modified, so WMI device registration (e.g. \_SB.PCI0.WMID /
+//    MICommonInterface) can no longer be broken by malformed patch bytes.
+//
+// 2) In-place patching (原地补丁, PatchTablesInPlace): firmware-side
+//    consumers (Insyde SMM / EC arbitration) bound themselves to the ORIGINAL
+//    DSDT/SSDT4 physical pages at POST and never follow pointer redirection,
+//    so replacement alone leaves the power/thermal control logic running
+//    from the old pages. Equal-size byte patches (src/InplacePatches.h,
+//    occurrence counts verified) are therefore applied directly to the
+//    original tables, whose checksums are recomputed in place. Windows
+//    follows the new pointers (channel 1) and the firmware sees the patched
+//    original bytes (channel 2); both deliver the same logic changes.
 // ---------------------------------------------------------------------------
 
 #define OEM_TABLE_ID_EDK2    0x20202020324B4445ULL   // "EDK2    " (little-endian)
@@ -170,6 +182,253 @@ static BOOLEAN ApplyReplacement(
 
     LogToFile(SystemTable, ImageHandle, LogTag);
     return TRUE;
+}
+
+// ---------------------------------------------------------------------------
+// PatchTablesInPlace: apply equal-size byte patches to the ORIGINAL tables.
+// ---------------------------------------------------------------------------
+
+static UINTN CountOccurrences(
+    const UINT8 *Buffer,
+    UINTN BufferSize,
+    const UINT8 *Pattern,
+    UINTN PatternSize
+)
+{
+    UINTN Count = 0;
+    UINTN i, j;
+
+    if (Pattern == NULL || PatternSize == 0 || BufferSize < PatternSize) {
+        return 0;
+    }
+
+    for (i = 0; i <= BufferSize - PatternSize; i++) {
+        BOOLEAN Match = TRUE;
+        for (j = 0; j < PatternSize; j++) {
+            if (Buffer[i + j] != Pattern[j]) {
+                Match = FALSE;
+                break;
+            }
+        }
+        if (Match) {
+            Count++;
+            i += PatternSize - 1;
+        }
+    }
+    return Count;
+}
+
+static VOID ReplaceAllOccurrences(
+    UINT8 *Buffer,
+    UINTN BufferSize,
+    const UINT8 *Search,
+    UINTN SearchLen,
+    const UINT8 *Replace,
+    UINTN ReplaceLen
+)
+{
+    UINTN i, j;
+
+    if (Search == NULL || Replace == NULL || SearchLen == 0 ||
+        ReplaceLen != SearchLen || BufferSize < SearchLen) {
+        return;
+    }
+
+    for (i = 0; i <= BufferSize - SearchLen; i++) {
+        BOOLEAN Match = TRUE;
+        for (j = 0; j < SearchLen; j++) {
+            if (Buffer[i + j] != Search[j]) {
+                Match = FALSE;
+                break;
+            }
+        }
+        if (Match) {
+            for (j = 0; j < ReplaceLen; j++) {
+                Buffer[i + j] = Replace[j];
+            }
+            i += SearchLen - 1;
+        }
+    }
+}
+
+static VOID LogInplaceResult(
+    EFI_SYSTEM_TABLE *SystemTable,
+    EFI_HANDLE ImageHandle,
+    const CHAR16 *Prefix,
+    const CHAR16 *Name,
+    UINTN Found,
+    UINTN Expected
+)
+{
+    CHAR16 Buf[256];
+    CHAR16 NumStr[32];
+    UINTN Pos = 0;
+    UINTN i;
+
+    for (i = 0; Prefix[i] != 0 && Pos < 240; i++) {
+        Buf[Pos++] = Prefix[i];
+    }
+    for (i = 0; Name[i] != 0 && Pos < 240; i++) {
+        Buf[Pos++] = Name[i];
+    }
+    if (Pos < 240) Buf[Pos++] = L' ';
+    if (Pos < 240) Buf[Pos++] = L'(';
+    StatusToHex((EFI_STATUS)Found, NumStr);
+    for (i = 0; NumStr[i] != 0 && Pos < 240; i++) {
+        Buf[Pos++] = NumStr[i];
+    }
+    if (Pos < 240) Buf[Pos++] = L'/';
+    StatusToHex((EFI_STATUS)Expected, NumStr);
+    for (i = 0; NumStr[i] != 0 && Pos < 240; i++) {
+        Buf[Pos++] = NumStr[i];
+    }
+    if (Pos < 240) Buf[Pos++] = L')';
+    Buf[Pos] = 0;
+
+    LogToFile(SystemTable, ImageHandle, Buf);
+}
+
+// Locates the ORIGINAL DSDT (via FACP) and SSDT4 (via XSDT entry match),
+// applies every gInplacePatches entry whose occurrence count matches its
+// ExpectedCount, and recomputes the modified tables' checksums in place.
+// Must run BEFORE ReplaceAcpiTables, while the XSDT entries still point at
+// the original tables. The original pages are writable on this platform
+// (verified by the earlier in-place injection experiments).
+EFI_STATUS PatchTablesInPlace(
+    EFI_SYSTEM_TABLE *SystemTable,
+    EFI_HANDLE ImageHandle,
+    EFI_ACPI_2_0_ROOT_SYSTEM_DESCRIPTION_POINTER *Rsdp
+)
+{
+    EFI_ACPI_SDT_HEADER *Xsdt = (EFI_ACPI_SDT_HEADER *)(Rsdp->XsdtAddress);
+    EFI_ACPI_SDT_HEADER *DsdtTable = NULL;
+    EFI_ACPI_SDT_HEADER *Ssdt4Table = NULL;
+    BOOLEAN DsdtModified = FALSE;
+    BOOLEAN Ssdt4Modified = FALSE;
+    UINTN EntryCount;
+    UINT64 *EntryPtr;
+    UINTN Index;
+    UINTN i;
+    UINTN PatchesApplied = 0;
+    UINTN PatchesSkipped = 0;
+
+    if (Xsdt == NULL || Xsdt->Signature != 0x54445358) { // "XSDT"
+        LogToFile(SystemTable, ImageHandle, L"[-] Error: Invalid XSDT signature during in-place patch scan.");
+        return EFI_NOT_FOUND;
+    }
+
+    EntryCount = (Xsdt->Length - sizeof(EFI_ACPI_SDT_HEADER)) / sizeof(UINT64);
+    EntryPtr = (UINT64 *)((UINT8 *)Xsdt + sizeof(EFI_ACPI_SDT_HEADER));
+
+    LogToFile(SystemTable, ImageHandle, L"[+] Starting in-place patch scan on ORIGINAL firmware tables...");
+
+    for (Index = 0; Index < EntryCount; Index++) {
+        EFI_ACPI_SDT_HEADER *Table = (EFI_ACPI_SDT_HEADER *)(EntryPtr[Index]);
+
+        if (!IsValidAcpiPointer(Table)) {
+            continue;
+        }
+
+        if (Table->Signature == ACPI_SIG_FACP && DsdtTable == NULL) {
+            // DSDT is referenced from FACP, not from the XSDT directly.
+            UINT64 *XDsdtPtr = (UINT64 *)((UINT8 *)Table + 140);
+            UINT32 *DsdtPtr = (UINT32 *)((UINT8 *)Table + 40);
+            UINT64 Addr = *XDsdtPtr;
+            EFI_ACPI_SDT_HEADER *Dsdt;
+
+            if (Addr == 0) {
+                Addr = *DsdtPtr;
+            }
+            if (Addr == 0) {
+                continue;
+            }
+            Dsdt = (EFI_ACPI_SDT_HEADER *)Addr;
+            if (IsValidAcpiPointer(Dsdt) && Dsdt->Signature == ACPI_SIG_DSDT) {
+                DsdtTable = Dsdt;
+                LogToFile(SystemTable, ImageHandle, L"[+] InPlace: original DSDT located via FACP.");
+            }
+        }
+        else if (Table->Signature == ACPI_SIG_SSDT && Ssdt4Table == NULL) {
+            if (Table->OemTableId == OEM_TABLE_ID_EDK2 &&
+                Table->OemRevision == 0x00001000 &&
+                ContainsBytes((const UINT8 *)Table, Table->Length,
+                              (const UINT8 *)"NPCF", 4)) {
+                Ssdt4Table = Table;
+                LogToFile(SystemTable, ImageHandle, L"[+] InPlace: original SSDT4 (NPCF) located via XSDT.");
+            }
+        }
+    }
+
+    if (DsdtTable == NULL) {
+        LogToFile(SystemTable, ImageHandle, L"[-] Warn: original DSDT not found for in-place patching.");
+    }
+    if (Ssdt4Table == NULL) {
+        LogToFile(SystemTable, ImageHandle, L"[-] Warn: original SSDT4 not found for in-place patching.");
+    }
+
+    for (i = 0; i < gInplacePatchCount; i++) {
+        const INPLACE_PATCH *Patch = &gInplacePatches[i];
+        EFI_ACPI_SDT_HEADER *Target;
+        BOOLEAN *ModifiedFlag;
+        UINTN Found;
+
+        if (Patch->TargetTable == INPLACE_TARGET_DSDT) {
+            Target = DsdtTable;
+            ModifiedFlag = &DsdtModified;
+        } else {
+            Target = Ssdt4Table;
+            ModifiedFlag = &Ssdt4Modified;
+        }
+
+        if (Target == NULL) {
+            LogToFile(SystemTable, ImageHandle, L"[-] ALARM: InPlace target table not found. Patch SKIPPED: ");
+            LogToFile(SystemTable, ImageHandle, Patch->Name);
+            PatchesSkipped++;
+            continue;
+        }
+
+        if (Patch->SearchLen != Patch->ReplaceLen || Patch->SearchLen == 0) {
+            LogToFile(SystemTable, ImageHandle, L"[-] ALARM: InPlace patch has unequal search/replace size. Patch SKIPPED: ");
+            LogToFile(SystemTable, ImageHandle, Patch->Name);
+            PatchesSkipped++;
+            continue;
+        }
+
+        Found = CountOccurrences((const UINT8 *)Target, Target->Length,
+                                 Patch->Search, Patch->SearchLen);
+        if (Found == Patch->ExpectedCount) {
+            ReplaceAllOccurrences((UINT8 *)Target, Target->Length,
+                                  Patch->Search, Patch->SearchLen,
+                                  Patch->Replace, Patch->ReplaceLen);
+            *ModifiedFlag = TRUE;
+            PatchesApplied++;
+            LogInplaceResult(SystemTable, ImageHandle, L"[+] InPlace patch applied: ",
+                             Patch->Name, Found, Patch->ExpectedCount);
+        } else {
+            PatchesSkipped++;
+            LogInplaceResult(SystemTable, ImageHandle, L"[-] ALARM: InPlace count mismatch, patch SKIPPED: ",
+                             Patch->Name, Found, Patch->ExpectedCount);
+        }
+    }
+
+    if (DsdtModified) {
+        DsdtTable->Checksum = 0;
+        DsdtTable->Checksum = CalculateChecksum8((UINT8 *)DsdtTable, DsdtTable->Length);
+        LogToFile(SystemTable, ImageHandle, L"[+] InPlace: original DSDT checksum recomputed in place.");
+    }
+    if (Ssdt4Modified) {
+        Ssdt4Table->Checksum = 0;
+        Ssdt4Table->Checksum = CalculateChecksum8((UINT8 *)Ssdt4Table, Ssdt4Table->Length);
+        LogToFile(SystemTable, ImageHandle, L"[+] InPlace: original SSDT4 checksum recomputed in place.");
+    }
+
+    if (PatchesApplied == 0 && PatchesSkipped == 0) {
+        LogToFile(SystemTable, ImageHandle, L"[-] Warn: no in-place patches evaluated.");
+        return EFI_NOT_FOUND;
+    }
+
+    LogToFile(SystemTable, ImageHandle, L"[+] In-place patch pass finished.");
+    return EFI_SUCCESS;
 }
 
 // ---------------------------------------------------------------------------

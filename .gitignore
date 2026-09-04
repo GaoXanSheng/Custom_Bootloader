@@ -16,3 +16,4 @@ build/
 version.txt
 src/Version.h
 src/acpi/VersionData.asl
+/.mimosa/

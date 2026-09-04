@@ -73,4 +73,16 @@ class CustomDbUnlock {
 
     [WmiMethodId(15), Implemented, Description("Get AMD ALIB Mailbox Return Data")]
     void GetAmdAlibDirect([in] uint32 SubFunction, [out] uint32 ReturnVal);
+
+    // ==========================================
+    // 域 8: Dynamic Boost 状态查询
+    // ==========================================
+    [WmiMethodId(16), Implemented, Description("Get Dynamic Boost State")]
+    void GetDynamicBoost([in] uint32 Reserved, [out] uint32 Value);
+
+    // ==========================================
+    // 域 9: 全量 EC RAM 字节读取 (0x00-0xFF)
+    // ==========================================
+    [WmiMethodId(17), Implemented, Description("Get Raw EC RAM Byte (full 0x00-0xFF)")]
+    void GetEcByte([in] uint32 RegisterOffset, [out] uint32 ReadVal);
 };

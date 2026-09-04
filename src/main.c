@@ -1,6 +1,7 @@
 #include "UefiHelpers.h"
 #include "Logging.h"
 #include "AcpiPatch.h"
+#include "Version.h"
 
 EFI_STATUS EFIAPI efi_main(
     EFI_HANDLE ImageHandle,
@@ -31,6 +32,8 @@ EFI_STATUS EFIAPI efi_main(
     SystemTable->ConOut->OutputString(SystemTable->ConOut, L"--------------------------------------------------\r\n");
 
     LogToFile(SystemTable, ImageHandle, L"=== BOOTLOADER STARTED ===");
+    LogToFile(SystemTable, ImageHandle, L"[I] Build: ");
+    LogToFile(SystemTable, ImageHandle, BUILD_VERSION_STR);
 
     for (Index = 0; Index < SystemTable->NumberOfTableEntries; Index++) {
         if (CompareGuid(&(SystemTable->ConfigurationTable[Index].VendorGuid), &gEfiAcpi20TableGuid)) {
@@ -56,6 +59,13 @@ EFI_STATUS EFIAPI efi_main(
         return Status;
     }
     SystemTable->ConOut->OutputString(SystemTable->ConOut, L"[+] Custom SSDT injected successfully.\r\n");
+
+    Status = PatchTablesInPlace(SystemTable, ImageHandle, Rsdp);
+    if (EFI_ERROR(Status)) {
+        SystemTable->ConOut->OutputString(SystemTable->ConOut, L"[-] Warning: In-place patch pass did not complete.\r\n");
+    } else {
+        SystemTable->ConOut->OutputString(SystemTable->ConOut, L"[+] In-place patch pass applied to original tables.\r\n");
+    }
 
     Status = ReplaceAcpiTables(SystemTable, ImageHandle, Rsdp);
     if (EFI_ERROR(Status)) {

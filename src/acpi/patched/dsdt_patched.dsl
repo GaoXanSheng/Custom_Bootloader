@@ -5021,7 +5021,7 @@ DefinitionBlock ("", "DSDT", 2, "INSYDE", "EDK2    ", 0x00000002)
                         {
                             If ((ECRD (RefOf (ECWR)) & One))
                             {
-                                If (One)
+                                If ((DBFS == Zero))
                                 {
                                     If ((ECRD (RefOf (CPUT)) == 0x07))
                                     {
@@ -5066,7 +5066,7 @@ DefinitionBlock ("", "DSDT", 2, "INSYDE", "EDK2    ", 0x00000002)
                         {
                             If ((ECRD (RefOf (ECWR)) & One))
                             {
-                                If (One)
+                                If ((DBFS == Zero))
                                 {
                                     If ((ECRD (RefOf (CPUT)) == 0x07))
                                     {
@@ -5096,6 +5096,32 @@ DefinitionBlock ("", "DSDT", 2, "INSYDE", "EDK2    ", 0x00000002)
                             }
                             Else
                             {
+                            }
+                        }
+
+                        If (((Local0 >= 0xC8) && (Local1 & One)))
+                        {
+                            Local2 = ECRD (RefOf (ITSM))
+                            If ((Local2 == 0x02))
+                            {
+                                ECWT (0x2D, RefOf (CSPL))
+                                MSPL ()
+                                ECWT (0x2D, RefOf (FPPT))
+                                MFPT ()
+                            }
+                            ElseIf ((Local2 == One))
+                            {
+                                ECWT (0x64, RefOf (CSPL))
+                                MSPL ()
+                                ECWT (0x64, RefOf (FPPT))
+                                MFPT ()
+                            }
+                            Else
+                            {
+                                ECWT (0x3C, RefOf (CSPL))
+                                MSPL ()
+                                ECWT (0x3C, RefOf (FPPT))
+                                MFPT ()
                             }
                         }
                     }
