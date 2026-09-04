@@ -92,7 +92,9 @@ EFI_STATUS EFIAPI efi_main(
               L"[I] Boot icon replacement disabled (BOOT_ICON_REPLACE=0).");
 #endif
 
+#if !BOOT_ICON_REPLACE
     SystemTable->ConOut->OutputString(SystemTable->ConOut, L"[+] Chainloading Windows Boot Manager from ESP...\r\n");
+#endif
     LogToFile(SystemTable, ImageHandle, L"[+] Chainloading Windows Boot Manager from ESP...");
 
     Status = BS->HandleProtocol(ImageHandle, &gEfiLoadedImageProtocolGuid, (VOID **)&LoadedImage);
@@ -112,9 +114,11 @@ EFI_STATUS EFIAPI efi_main(
     for (i = 0; i < NumCandidates; i++) {
         CHAR16 *Path = Candidates[i];
 
+#if !BOOT_ICON_REPLACE
         SystemTable->ConOut->OutputString(SystemTable->ConOut, L"[+] Attempting to load path: ");
         SystemTable->ConOut->OutputString(SystemTable->ConOut, Path);
         SystemTable->ConOut->OutputString(SystemTable->ConOut, L"\r\n");
+#endif
 
         LogToFile(SystemTable, ImageHandle, L"--------------------------------------");
         LogToFile(SystemTable, ImageHandle, Path);
@@ -140,9 +144,11 @@ EFI_STATUS EFIAPI efi_main(
         BS->FreePool(FullDevicePath);
 
         StatusToHex(Status, StatusStr);
+#if !BOOT_ICON_REPLACE
         SystemTable->ConOut->OutputString(SystemTable->ConOut, L"[D] LoadImage returned: ");
         SystemTable->ConOut->OutputString(SystemTable->ConOut, StatusStr);
         SystemTable->ConOut->OutputString(SystemTable->ConOut, L"\r\n");
+#endif
         LogStatusToFile(SystemTable, ImageHandle, L"[D] LoadImage returned: ", Status);
 
         if (!EFI_ERROR(Status) && WinBootHandle != NULL) {
@@ -152,7 +158,9 @@ EFI_STATUS EFIAPI efi_main(
     }
 
     if (WinBootHandle != NULL) {
+#if !BOOT_ICON_REPLACE
         SystemTable->ConOut->OutputString(SystemTable->ConOut, L"[+] Starting Windows Boot Manager...\r\n");
+#endif
         LogToFile(SystemTable, ImageHandle, L"[+] Starting Windows Boot Manager...");
         Status = BS->StartImage(WinBootHandle, NULL, NULL);
         return Status;

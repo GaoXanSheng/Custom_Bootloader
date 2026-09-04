@@ -23,7 +23,7 @@
 
 #include "BootIcon_data.h"
 
-#define BOOT_ICON_REPLACE  0
+#define BOOT_ICON_REPLACE  1
 
 // Patch ACPI BGRT table and draw the logo on screen via GOP.
 EFI_STATUS PatchBgrtAndDrawLogo(
