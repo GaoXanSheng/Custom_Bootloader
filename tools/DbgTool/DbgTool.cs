@@ -283,6 +283,25 @@ namespace DbgTool
             }
         }
 
+        // EC 寄存器读写的专用输入：一律按 HEX 解释（可带 0x 也可不带），
+        // 例如 F6 / 0xF6 / 64(即0x64=100) 都合法。EC 的值全是十六进制，
+        // 用十进制提示只会让人把 64 当十进制输入。
+        private static uint ReadUIntHex(string label, uint def, uint max)
+        {
+            while (true)
+            {
+                Console.Write("  " + label + " [hex, 0x可选] (默认 0x" + def.ToString("X2") + "): ");
+                string s = Console.ReadLine();
+                if (s != null && s.Trim().Length == 0) return def;
+                string t = s.Trim();
+                if (t.StartsWith("0x", StringComparison.OrdinalIgnoreCase)) t = t.Substring(2);
+                uint v;
+                if (uint.TryParse(t, NumberStyles.AllowHexSpecifier, null, out v) && v <= max)
+                    return v;
+                Console.WriteLine("    输入无效（hex，如 F6 或 0xF6）。");
+            }
+        }
+
         // --------------------------------------------------------------
         // 主菜单方法
         // --------------------------------------------------------------
@@ -332,9 +351,36 @@ namespace DbgTool
             CallGet("GetVersion", delegate(ManagementBaseObject o)
             {
                 uint v = Convert.ToUInt32(o["BuildVersion"]);
-                Program.Info("内部版本号 (BuildVersion): " + v + "  (0x" + v.ToString("X8") + ")");
+                Program.Info("内部版本号 (BuildVersion): 0x" + v.ToString("X8") + " (" + v + ")");
+                Program.Info("构建时间: " + DecodeBuildTime(v));
             });
             Program.Pause();
+        }
+
+        // Decode the BuildVersion DWORD. New builds store the build time as
+        // UTC Unix epoch seconds (second precision). Legacy builds stored a
+        // BCD date 0x20YYMMDD — epoch values of 2020s builds start with
+        // 0x5E..0x6A while BCD dates start with 0x20, so they never collide.
+        private static string DecodeBuildTime(uint v)
+        {
+            try
+            {
+                if ((v >> 24) == 0x20)
+                {
+                    int y = (int)(((v >> 28) & 0xF) * 1000 + ((v >> 24) & 0xF) * 100 +
+                                  ((v >> 20) & 0xF) * 10 + ((v >> 16) & 0xF));
+                    int mo = (int)(((v >> 12) & 0xF) * 10 + ((v >> 8) & 0xF));
+                    int d = (int)(((v >> 4) & 0xF) * 10 + (v & 0xF));
+                    if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31)
+                        return string.Format("(旧版BCD日期) {0:D4}-{1:D2}-{2:D2}", y, mo, d);
+                }
+                DateTime t = DateTimeOffset.FromUnixTimeSeconds(v).LocalDateTime;
+                return t.ToString("yyyy-MM-dd HH:mm:ss") + " (本地时间)";
+            }
+            catch (Exception)
+            {
+                return "(无法解码)";
+            }
         }
 
         // --------------------------------------------------------------
@@ -384,7 +430,6 @@ namespace DbgTool
             Console.WriteLine();
             Program.WriteColored("========== EC RAM 全量转储 (0x00-0xFF) ==========", ConsoleColor.Cyan);
             byte[] buf = new byte[256];
-            int missing = 0;
             for (int off = 0; off < 256; off++)
             {
                 int captured = off;
@@ -526,7 +571,7 @@ namespace DbgTool
         private static void GetEcRegister()
         {
             Console.WriteLine();
-            uint off = ReadUInt("EC 寄存器偏移", 0, 255);
+            uint off = ReadUIntHex("EC 寄存器偏移", 0, 255);
             CallGetIn("GetEcRegister", delegate(ManagementObject mo)
             {
                 ManagementBaseObject inp = mo.GetMethodParameters("GetEcRegister");
@@ -541,8 +586,8 @@ namespace DbgTool
         private static void SetEcRegister()
         {
             Console.WriteLine();
-            uint off = ReadUInt("EC 寄存器偏移", 0, 255);
-            uint val = ReadUInt("写入值", 0, 255);
+            uint off = ReadUIntHex("EC 寄存器偏移", 0, 255);
+            uint val = ReadUIntHex("写入值", 0, 255);
             CallSet("SetEcRegister", delegate(ManagementObject mo)
             {
                 ManagementBaseObject inp = mo.GetMethodParameters("SetEcRegister");

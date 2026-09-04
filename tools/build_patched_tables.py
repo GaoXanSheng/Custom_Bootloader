@@ -21,6 +21,8 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 IASL = os.path.join(REPO, "tools", "isal", "iasl.exe")
 BUILD = os.path.join(REPO, "build")
 
+import generate_patched_tables
+
 TABLES = [
     ("src/acpi/patched/ssdt4_patched.dsl", "ssdt4_patched"),
     ("src/acpi/patched/dsdt_patched.dsl", "dsdt_patched"),
@@ -28,6 +30,9 @@ TABLES = [
 
 
 def main():
+    print("[*] Generating patched ACPI table DSLs...")
+    generate_patched_tables.main()
+
     os.makedirs(BUILD, exist_ok=True)
     for src_rel, out_base in TABLES:
         src = os.path.join(REPO, src_rel)

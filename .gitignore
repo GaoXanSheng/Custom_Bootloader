@@ -9,11 +9,21 @@ build/
 *.swo
 *~
 
-# Reasonix agent workspace
+# Reasonix / mimosa agent workspace
 .reasonix/
+.mimosa/
+**/.mimosa/
+
+# Python cache
+__pycache__/
+*.pyc
 
 # Auto-generated at build time (see tools/generate_version.py)
 version.txt
 src/Version.h
 src/acpi/VersionData.asl
-/.mimosa/
+
+# Built binaries in root/tools (build/ already ignored)
+BOOTX64.efi
+DbgTool.exe
+tools/DbgTool/DbgTool.exe

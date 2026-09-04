@@ -333,32 +333,23 @@ DefinitionBlock ("", "SSDT", 2, "CUSTOM", "DBUNLOCK", 0x00002000)
 
             Method (_INI, 0, NotSerialized)
             {
-                // EXPERIMENT (DB OFF): DBFS left at stock value — the NVIDIA
-                // driver reads DBAC (NPCF sub-func#2) for DB status; with
-                // DBAC=0 the driver uses TGPA directly instead of the 97.5W
-                // DB base. CPU PL1/PL2 clamps are disabled in dsdt_patched.
-
-                // GPU 功耗模式开启（等效固件 WMI 0x0900 FUN3=1）：
-                // EC 硬件按 GPMD 钳制独显功耗，置 1 解除 ~100W 均衡档墙。
+                // GPU 功耗模式开启: GFLG=0x55, GPMD=1 解除独显功耗限制
                 If (CondRefOf (\_SB.PCI0.LPC0.H_EC.ECWT))
                 {
                     \_SB.PCI0.LPC0.H_EC.ECWT (0x55, RefOf (\_SB.PCI0.LPC0.H_EC.GFLG))
                     \_SB.PCI0.LPC0.H_EC.ECWT (One, RefOf (\_SB.PCI0.LPC0.H_EC.GPMD))
                 }
 
-                // CPU PL1/PL2 开机直推 SMU（MSPL/MFPT 钳位已被 DSDT 补丁禁用）：
-                // CSPL=0x50(80W) / FPPT=0x50(80W)，经 MODP->ALIB 生效。
-                // 注：固件随后的 FNQS(_Q81/_Q82) 会覆写 EC 字段，dsdt_patched
-                // 已在 FNQS 尾部追加同样的覆盖块，最终生效以 FNQS 为准。
+                // CPU PL1/PL2 初始化配置 (CSPL=100W, FPPT=140W) 并推送 SMU
                 If (CondRefOf (\_SB.PCI0.LPC0.H_EC.ECWT))
                 {
-                    \_SB.PCI0.LPC0.H_EC.ECWT (0x50, RefOf (\_SB.PCI0.LPC0.H_EC.CSPL))
+                    \_SB.PCI0.LPC0.H_EC.ECWT (0x64, RefOf (\_SB.PCI0.LPC0.H_EC.CSPL))
                     If (CondRefOf (\_SB.PCI0.LPC0.H_EC.MSPL))
                     {
                         \_SB.PCI0.LPC0.H_EC.MSPL ()
                     }
 
-                    \_SB.PCI0.LPC0.H_EC.ECWT (0x50, RefOf (\_SB.PCI0.LPC0.H_EC.FPPT))
+                    \_SB.PCI0.LPC0.H_EC.ECWT (0x8C, RefOf (\_SB.PCI0.LPC0.H_EC.FPPT))
                     If (CondRefOf (\_SB.PCI0.LPC0.H_EC.MFPT))
                     {
                         \_SB.PCI0.LPC0.H_EC.MFPT ()
@@ -410,10 +401,13 @@ DefinitionBlock ("", "SSDT", 2, "CUSTOM", "DBUNLOCK", 0x00002000)
                 // =========================================================
                 If (LEqual (Arg1, 1))
                 {
-                    // SetDbfs must mirror the firmware's _Q81/_Q82 behavior:
-                    //   DBFS = X; FNQS (ITSM); COMM ()
-                    // Without FNQS the thermal profile (THMD) never switches,
-                    // so toggling DBFS via WMI had no effect.
+                    // Kept for parity with the firmware's own DBFS flow
+                    // (_Q81/_Q82 style: DBFS = X; FNQS (ITSM); COMM ()).
+                    // NOTE: since the power-wall unlock, the patched FNQS no
+                    // longer reads DBFS (AC always dispatches the full-power
+                    // profile) and the MSPL/MFPT clamps are disabled, so this
+                    // toggle only affects firmware-side consumers of the DBFS
+                    // EC field - it can no longer lower the CPU profile.
                     If (CondRefOf (\DBFS)) { Store (INP0, \DBFS) }
                     If (CondRefOf (\_SB.PCI0.LPC0.H_EC.FNQS))
                     {
@@ -436,6 +430,9 @@ DefinitionBlock ("", "SSDT", 2, "CUSTOM", "DBUNLOCK", 0x00002000)
 
                 // =========================================================
                 // Method 3: GetVersion
+                //   VERS (VersionData.asl) = build time as UTC Unix epoch
+                //   seconds (32-bit DWORD cannot hold BCD YYYYMMDDHHMMSS).
+                //   DbgTool decodes it to local "yyyy-MM-dd HH:mm:ss".
                 // =========================================================
                 If (LEqual (Arg1, 3))
                 {
@@ -670,8 +667,8 @@ DefinitionBlock ("", "SSDT", 2, "CUSTOM", "DBUNLOCK", 0x00002000)
                 // =========================================================
                 // Method 16: GetDynamicBoost
                 // =========================================================
-                // 结合本补丁（_INI 强制 DBFS=0 + MSPL/MFPT 钳制块 If(Zero) 禁用）：
-                // 返回 Dynamic Boost 相关数据，供工具计算"最大借用功耗"。
+                // 结合本补丁（DBFS 保持原厂值不做强制 + MSPL/MFPT 钳制块 If(Zero)
+                // 禁用 + FNQS 整方法替换为 AC 满血档）返回数据供工具计算：
                 //   V4D1 = DBFS 当前值（0=禁 / 1=启 / 0xFFFFFFFF=不存在）
                 //   V4D2 = CSPL（EC 0xF6，CPU PL1，单位 W）
                 //   V4D3 = FPPT（EC 0xF7，CPU PL2，单位 W）

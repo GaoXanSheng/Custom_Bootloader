@@ -4979,178 +4979,38 @@ DefinitionBlock ("", "DSDT", 2, "INSYDE", "EDK2    ", 0x00000002)
 
                     Method (FNQS, 1, Serialized)
                     {
-                        Local0 = (ECRD (RefOf (AWHG)) << 0x08)
-                        Local0 += ECRD (RefOf (AWLW))
-                        Local1 = ECRD (RefOf (ECWR))
-                        If (((Local0 <= 0xC8) && (Local1 & One)))
+                        Local1 = (ECRD (RefOf (AWHG)) << 0x08)
+                        Local1 += ECRD (RefOf (AWLW))
+                        If (((ECRD (RefOf (ECWR)) & One) || (Local1 > 0x32)))
                         {
-                            ECWT (0x02, RefOf (ITSM))
-                            THMD (0x12)
-                        }
-                        ElseIf ((ToInteger (Arg0) == 0x02))
-                        {
-                            If ((ECRD (RefOf (ECWR)) & One))
+                            If ((ToInteger (Arg0) == Zero))
                             {
-                                If ((ECRD (RefOf (CPUT)) == 0x07))
-                                {
-                                    THMD (0x0A)
-                                }
-                                ElseIf ((ECRD (RefOf (CPUT)) == 0x09))
-                                {
-                                    THMD (0x04)
-                                }
-                                ElseIf ((ECRD (RefOf (CPUT)) == 0x05))
-                                {
-                                    THMD (0x0A)
-                                }
-                            }
-                            ElseIf ((ECRD (RefOf (CPUT)) == 0x07))
-                            {
-                                THMD (0x0B)
-                            }
-                            ElseIf ((ECRD (RefOf (CPUT)) == 0x09))
-                            {
-                                THMD (0x05)
-                            }
-                            ElseIf ((ECRD (RefOf (CPUT)) == 0x05))
-                            {
-                                THMD (0x0B)
-                            }
-                        }
-                        ElseIf ((ToInteger (Arg0) == Zero))
-                        {
-                            If ((ECRD (RefOf (ECWR)) & One))
-                            {
-                                If ((DBFS == Zero))
-                                {
-                                    If ((ECRD (RefOf (CPUT)) == 0x07))
-                                    {
-                                        THMD (0x15)
-                                    }
-                                    ElseIf ((ECRD (RefOf (CPUT)) == 0x09))
-                                    {
-                                        THMD (0x13)
-                                    }
-                                    ElseIf ((ECRD (RefOf (CPUT)) == 0x05))
-                                    {
-                                        THMD (0x15)
-                                    }
-                                }
-                                ElseIf ((ECRD (RefOf (CPUT)) == 0x07))
-                                {
-                                    THMD (0x16)
-                                }
-                                ElseIf ((ECRD (RefOf (CPUT)) == 0x09))
-                                {
-                                    THMD (0x14)
-                                }
-                                ElseIf ((ECRD (RefOf (CPUT)) == 0x05))
-                                {
-                                    THMD (0x16)
-                                }
-                            }
-                            ElseIf ((ECRD (RefOf (CPUT)) == 0x07))
-                            {
-                                THMD (0x09)
-                            }
-                            ElseIf ((ECRD (RefOf (CPUT)) == 0x09))
-                            {
-                                THMD (0x03)
-                            }
-                            ElseIf ((ECRD (RefOf (CPUT)) == 0x05))
-                            {
-                                THMD (0x09)
-                            }
-                        }
-                        ElseIf ((ToInteger (Arg0) == One))
-                        {
-                            If ((ECRD (RefOf (ECWR)) & One))
-                            {
-                                If ((DBFS == Zero))
-                                {
-                                    If ((ECRD (RefOf (CPUT)) == 0x07))
-                                    {
-                                        THMD (0x06)
-                                    }
-                                    ElseIf ((ECRD (RefOf (CPUT)) == 0x09))
-                                    {
-                                        THMD (Zero)
-                                    }
-                                    ElseIf ((ECRD (RefOf (CPUT)) == 0x05))
-                                    {
-                                        THMD (0x06)
-                                    }
-                                }
-                                ElseIf ((ECRD (RefOf (CPUT)) == 0x07))
-                                {
-                                    THMD (0x07)
-                                }
-                                ElseIf ((ECRD (RefOf (CPUT)) == 0x09))
-                                {
-                                    THMD (One)
-                                }
-                                ElseIf ((ECRD (RefOf (CPUT)) == 0x05))
-                                {
-                                    THMD (0x07)
-                                }
+                                THMD (0x14)
                             }
                             Else
                             {
+                                THMD (Zero)
                             }
-                        }
 
-                        If (((Local0 >= 0xC8) && (Local1 & One)))
+                            MSPL ()
+                            MFPT ()
+                        }
+                        Else
                         {
-                            Local2 = ECRD (RefOf (ITSM))
-                            If ((Local2 == 0x02))
-                            {
-                                ECWT (0x2D, RefOf (CSPL))
-                                MSPL ()
-                                ECWT (0x2D, RefOf (FPPT))
-                                MFPT ()
-                            }
-                            ElseIf ((Local2 == One))
-                            {
-                                ECWT (0x64, RefOf (CSPL))
-                                MSPL ()
-                                ECWT (0x64, RefOf (FPPT))
-                                MFPT ()
-                            }
-                            Else
-                            {
-                                ECWT (0x3C, RefOf (CSPL))
-                                MSPL ()
-                                ECWT (0x3C, RefOf (FPPT))
-                                MFPT ()
-                            }
+                            THMD (0x03)
                         }
                     }
 
                     Method (MSPL, 0, Serialized)
                     {
                         Local0 = ECRD (RefOf (CSPL))
-                        If (Zero)
+                        Local1 = (ECRD (RefOf (AWHG)) << 0x08)
+                        Local1 += ECRD (RefOf (AWLW))
+                        If (((ECRD (RefOf (ECWR)) & One) || (Local1 > 0x32)))
                         {
-                            If ((ECRD (RefOf (CPUT)) == 0x07))
+                            If ((Local0 < 0x50))
                             {
-                                If ((Local0 > 0x2D))
-                                {
-                                    Local0 = 0x3C
-                                }
-                            }
-                            ElseIf ((ECRD (RefOf (CPUT)) == 0x09))
-                            {
-                                If ((Local0 > 0x37))
-                                {
-                                    Local0 = 0x3C
-                                }
-                            }
-                            ElseIf ((ECRD (RefOf (CPUT)) == 0x05))
-                            {
-                                If ((Local0 > 0x2D))
-                                {
-                                    Local0 = 0x3C
-                                }
+                                Local0 = 0x50
                             }
                         }
 
@@ -5163,34 +5023,20 @@ DefinitionBlock ("", "DSDT", 2, "INSYDE", "EDK2    ", 0x00000002)
                     Method (MFPT, 0, Serialized)
                     {
                         Local0 = ECRD (RefOf (FPPT))
-                        If (Zero)
+                        Local1 = (ECRD (RefOf (AWHG)) << 0x08)
+                        Local1 += ECRD (RefOf (AWLW))
+                        If (((ECRD (RefOf (ECWR)) & One) || (Local1 > 0x32)))
                         {
-                            If ((ECRD (RefOf (CPUT)) == 0x07))
+                            If ((Local0 < 0x6E))
                             {
-                                If ((Local0 > 0x41))
-                                {
-                                    Local0 = 0x50
-                                }
-                            }
-                            ElseIf ((ECRD (RefOf (CPUT)) == 0x09))
-                            {
-                                If ((Local0 > 0x4B))
-                                {
-                                    Local0 = 0x50
-                                }
-                            }
-                            ElseIf ((ECRD (RefOf (CPUT)) == 0x05))
-                            {
-                                If ((Local0 > 0x41))
-                                {
-                                    Local0 = 0x50
-                                }
+                                Local0 = 0x6E
                             }
                         }
 
                         Local0 *= 0x03E8
                         MODP (0x06, Local0)
                     }
+
 
                     Method (COMM, 0, Serialized)
                     {
@@ -5469,44 +5315,20 @@ DefinitionBlock ("", "DSDT", 2, "INSYDE", "EDK2    ", 0x00000002)
                         Notify (ADP1, 0x80) // Status Change
                         Local1 = (ECRD (RefOf (AWHG)) << 0x08)
                         Local1 += ECRD (RefOf (AWLW))
-                        If ((ECRD (RefOf (ECWR)) & One))
+                        If (((ECRD (RefOf (ECWR)) & One) || (Local1 > 0x32)))
                         {
-                            If ((Local1 > 0xC8))
-                            {
-                                Local0 = ECRD (RefOf (ITSM))
-                                FNQS (Local0)
-                            }
-                            Else
-                            {
-                                If ((ECRD (RefOf (CMEN)) == One))
-                                {
-                                    ECWT (Zero, RefOf (CMEN))
-                                }
-
-                                GPSF = One
-                                DGST = 0xD1
-                                Local0 = ECRD (RefOf (ITSM))
-                                FNQS (Local0)
-                            }
+                            Local0 = ECRD (RefOf (ITSM))
+                            FNQS (Local0)
                         }
                         Else
                         {
                             If ((ECRD (RefOf (CMEN)) == One))
-                            {
+                            { 
                                 ECWT (Zero, RefOf (CMEN))
                             }
 
-                            If ((ECRD (RefOf (ITSM)) == One))
-                            {
-                                ECWT (Zero, RefOf (ITSM))
-                                FNQS (Zero)
-                                ECWT (0x55, RefOf (TFLG))
-                            }
-                            Else
-                            {
-                                Local0 = ECRD (RefOf (ITSM))
-                                FNQS (Local0)
-                            }
+                            Local0 = ECRD (RefOf (ITSM))
+                            FNQS (Local0)
                         }
 
                         Local0 = ECRD (RefOf (ITSM))
@@ -5515,6 +5337,7 @@ DefinitionBlock ("", "DSDT", 2, "INSYDE", "EDK2    ", 0x00000002)
                         ^^^WMID.EVBU [0x02] = Local0
                         Notify (WMID, 0x20) // Reserved
                     }
+
 
                     Method (_Q11, 0, NotSerialized)  // _Qxx: EC Query, xx=0x00-0xFF
                     {
@@ -5616,7 +5439,17 @@ DefinitionBlock ("", "DSDT", 2, "INSYDE", "EDK2    ", 0x00000002)
 
                         Method (_PSR, 0, NotSerialized)  // _PSR: Power Source
                         {
-                            Local0 = (^^PCI0.LPC0.H_EC.ECRD (RefOf (^^PCI0.LPC0.H_EC.ECWR)) & One)
+                            Local1 = (^^PCI0.LPC0.H_EC.ECRD (RefOf (^^PCI0.LPC0.H_EC.AWHG)) << 0x08)
+                            Local1 += ^^PCI0.LPC0.H_EC.ECRD (RefOf (^^PCI0.LPC0.H_EC.AWLW))
+                            If (((^^PCI0.LPC0.H_EC.ECRD (RefOf (^^PCI0.LPC0.H_EC.ECWR)) & One) || (Local1 > 0x32)))
+                            {
+                                Local0 = One
+                            }
+                            Else
+                            {
+                                Local0 = Zero
+                            }
+
                             If (((Local0 != ACDC) || (ACDC == 0xFF)))
                             {
                                 CreateWordField (XX00, Zero, SSZE)
@@ -5632,7 +5465,6 @@ DefinitionBlock ("", "DSDT", 2, "INSYDE", "EDK2    ", 0x00000002)
                                 Else
                                 {
                                     P80H = 0xECDC
-                                    ^^PCI0.GP17.VGA.AFN4 (0x02)
                                     ACST = One
                                 }
 
@@ -5641,6 +5473,7 @@ DefinitionBlock ("", "DSDT", 2, "INSYDE", "EDK2    ", 0x00000002)
 
                             Return (Local0)
                         }
+
 
                         Method (_PCL, 0, NotSerialized)  // _PCL: Power Consumer List
                         {

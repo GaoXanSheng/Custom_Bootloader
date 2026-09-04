@@ -4,6 +4,7 @@ EFI_GUID gEfiAcpi20TableGuid = { 0x8868E871, 0xE4F1, 0x11D3, { 0xBC, 0x22, 0x00,
 EFI_GUID gEfiLoadedImageProtocolGuid = { 0x5B1B31A1, 0x9562, 0x11D2, { 0x8E, 0x3F, 0x00, 0xA0, 0xC9, 0x69, 0x72, 0x3B } };
 EFI_GUID gEfiSimpleFileSystemProtocolGuid = { 0x964E5B22, 0x6459, 0x11D2, { 0x8E, 0x39, 0x00, 0xA0, 0xC9, 0x69, 0x72, 0x3B } };
 EFI_GUID gEfiDevicePathProtocolGuid = { 0x09576E91, 0x6D3F, 0x11D2, { 0x8E, 0x39, 0x00, 0xA0, 0xC9, 0x69, 0x72, 0x3B } };
+EFI_GUID gEfiGraphicsOutputProtocolGuid = { 0x9042A9DE, 0x23DC, 0x4A38, { 0x96, 0xFB, 0x7A, 0xDE, 0xD0, 0x80, 0x51, 0x6A } };
 
 void *UefiMemcpy(void *dest, const void *src, size_t count)
 {
@@ -40,6 +41,17 @@ BOOLEAN CompareGuid(EFI_GUID *g1, EFI_GUID *g2)
     for (i = 0; i < 8; i++) {
         if (g1->Data4[i] != g2->Data4[i]) return FALSE;
     }
+    return TRUE;
+}
+
+BOOLEAN IsValidAcpiPointer(VOID *Ptr)
+{
+    UINT64 Addr = (UINT64)Ptr;
+
+    if (Ptr == NULL) return FALSE;
+    if ((Addr & 3) != 0) return FALSE;
+    if (Addr < 0x100000ULL || Addr > 0x4000000000ULL) return FALSE;
+
     return TRUE;
 }
 

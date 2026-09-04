@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Generate patched ACPI table ASL sources (src/acpi/patched/*.dsl) from the
-original firmware tables (tools/acpi/*.dsl).
+Generate patched ACPI table ASL sources (src/acpi/patched/*.dsl) from original
+firmware tables (tools/acpi/*.dsl).
 
-Replaces the old runtime byte-SearchAndReplace patch engine (patches/*.txt):
-patches are now applied as ASL source edits, compiled offline by iASL into
-legal AML, and the bootloader swaps the whole table via XSDT redirection.
+Patches:
+  - SSDT4: CMPL/CNPL power raises, AC platform walls (180W -> 220W), remove CPUC NVIO throttle.
+  - DSDT: Disable DBFS CPU clamps in MSPL/MFPT, replace FNQS with safe AC/DC profile dispatch,
+          and streamline _Q10 power events.
 
 Usage:
     python tools/generate_patched_tables.py
@@ -19,73 +20,211 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC_ACPI = os.path.join(REPO, "tools", "acpi")
 OUT_DIR = os.path.join(REPO, "src", "acpi", "patched")
 
-# ---------------------------------------------------------------------------
-# Modification specs: (1-based line, expected original text, new text or None to delete)
-#
-# IMPORTANT (2026-08-14 final findings — verified by bisection):
-#   Dynamic Boost (DBAC/DBFS) must stay STOCK (disabled): DBAC=1 pins the
-#   GPU at 97.5W; DB off lets the driver use the platform max (139.5W).
-#   TGPA 140W -> 102.5W; MAGA=0 -> 120W; platform walls 260W -> 131.5W.
-#   ALL must stay stock. Only CMPL/CNPL raise + CPUC removal are kept
-#   (they push the limit to 139.54W, the VBIOS ceiling).
-# ---------------------------------------------------------------------------
-
 SSDT4_EDITS = [
-    # nvpcf_cmpl_unlock: CMPL 0x33(51W) -> 0x50(80W)
+    # CMPL 0x33 -> 0x50
     (1160, "            Name (CMPL, 0x33)", "            Name (CMPL, 0x50)"),
-    # nvpcf_cnpl_unlock: CNPL 0x10(16W) -> 0x36(54W)
+    # CNPL 0x10 -> 0x36
     (1161, "            Name (CNPL, 0x10)", "            Name (CNPL, 0x36)"),
-    # platform_walls_220w: raise AC platform power wall 180W -> 220W (0x1B8).
-    # Stock 180W caps CPU+GPU at ~180W (dual-burn: GPU 139.9 + CPU 39.8).
-    # 260W previously dropped the GPU driver limit to 131.5W; 220W is the
-    # middle ground — GPU ~135W + CPU ~80W in dual-burn.
-    (1153, "            Name (ATPP, 0x01B8)", "            Name (ATPP, 0x01E0)"),
+    # DTPP 120W (0xF0) -> 130W (0x0104)
     (1155, "            Name (DTPP, 0xF0)", "            Name (DTPP, 0x0104)"),
+    # Raise AC platform power walls: 180W (0x168) -> 220W (0x1B8)
     (1263, "                                    ATPP = 0x0168", "                                    ATPP = 0x01B8"),
-    (1285, "                                    TPPA = 0x0168", "                                    TPPA = 0x01B8"),
     (1292, "                                    ATPP = 0x0168", "                                    ATPP = 0x01B8"),
     (1293, "                                    ATP2 = 0x0168", "                                    ATP2 = 0x01B8"),
-    (1315, "                                    TPPA = 0x0168", "                                    TPPA = 0x01B8"),
-    # tgpa: KEEP STOCK. TGPA 140W made the driver drop the GPU limit to
-    # 102.5W (measured); stock 120W leaves it at 138-139.5W.
-    # maga: KEEP STOCK. MAGA=0 dropped the limit 131.5->120W (measured).
-    # nvpcf_bypass: remove `CPUC = NCHP` (skip I/O write that re-clamps platform power)
-    (1501, "                                    CPUC = NCHP /* \\_SB_.NPCF.NPCF.NCHP */", None),
-    # NOTE: DBAC = Zero assignments (1268/1276/1298/1306) intentionally kept
-    # at stock — Dynamic Boost must stay DISABLED (see header comment).
+    # Fix Turbo mode (Else) in dGPU mode: disable Dynamic Boost clamp, assign 140W GPU + 100W CPU, use ATPP wall
+    (1284, "                                    DBAC = One", "                                    DBAC = Zero\n                                    TGPA = 0x0118\n                                    MIGA = Zero\n                                    MAGA = 0xC8"),
+    (1285, "                                    TPPA = 0x0168", "                                    TPPA = ATPP"),
+    # Fix Turbo mode (Else) in Hybrid mode: disable Dynamic Boost clamp, assign 140W GPU + 100W CPU, use ATP2 wall
+    (1314, "                                    DBAC = One", "                                    DBAC = Zero\n                                    TGPA = 0x0118\n                                    MIGA = Zero\n                                    MAGA = 0xC8"),
+    (1315, "                                    TPPA = 0x0168", "                                    TPPA = ATP2"),
+    # Neutralize NVPCF sub-func#6 Case(One): disables CPUC NVIO write AND all 16-core 0x85 throttle notifications
+    (1493, "                                If ((IOBS != Zero))", "                                If (Zero)"),
 ]
 
-DSDT_EDITS = [
-    # cpu_clamp_DBFS_unlock: MSPL/MFPT DBFS==1 clamp block never runs (If Zero)
-    (5106, "                        If ((DBFS == One))", "                        If (Zero)"),
-    (5140, "                        If ((DBFS == One))", "                        If (Zero)"),
-    # r7_cspl_60w: 0x2D(45W) -> 0x3C(60W)
-    (5112, "                                    Local0 = 0x2D", "                                    Local0 = 0x3C"),
-    (5126, "                                    Local0 = 0x2D", "                                    Local0 = 0x3C"),
-    # r9_cspl_60w: 0x37(55W) -> 0x3C(60W)
-    (5119, "                                    Local0 = 0x37", "                                    Local0 = 0x3C"),
-    # r7_fppt_80w: 0x41(65W) -> 0x50(80W)
-    (5146, "                                    Local0 = 0x41", "                                    Local0 = 0x50"),
-    (5160, "                                    Local0 = 0x41", "                                    Local0 = 0x50"),
-    # r9_fppt_80w: 0x4B(75W) -> 0x50(80W)
-    (5153, "                                    Local0 = 0x4B", "                                    Local0 = 0x50"),
-    # fnqs_cpu_override: at the END of FNQS, on AC + adapter >= 200W, re-push
-    # CSPL/FPPT = 80W/80W to the SMU. (CPU-side unlock; FNQS branch logic
-    # itself stays stock so DBFS/DB state is untouched.)
-    (5100, "                        }",
-     "                        }\n"
-     "\n"
-     "                        If (((Local0 >= 0xC8) && (Local1 & One)))\n"
-     "                        {\n"
-     "                            ECWT (0x50, RefOf (CSPL))\n"
-     "                            MSPL ()\n"
-     "                            ECWT (0x50, RefOf (FPPT))\n"
-     "                            MFPT ()\n"
-     "                        }"),
-]
+DSDT_EDITS = []
+
+# FNQS replacement:
+# On AC (ECWR & 1):
+#   - Arg0 == 0 (Office/Quiet): Dispatch balanced profile THMD(0x14) (55W/65W)
+#   - Arg0 == 1 or 2 (Game/Turbo): Dispatch unlocked full-power profile THMD(Zero) (100W/105W/120W)
+# FNQS + MSPL + MFPT replacement:
+# Immunized against battery-borrowing events:
+# - Checks (ECWR & 1) OR adapter wattage ((AWHG << 8) + AWLW > 50W).
+#   When plugged into a 240W/280W adapter, battery borrowing transiently clears ECWR bit 0,
+#   which previously triggered the 35W battery profile THMD(0x03).
+#   With adapter wattage detection, AC full-power is safely maintained during dual-load borrowing!
+FNQS_MSPL_MFPT_NEW_BODY = (
+    "                    Method (FNQS, 1, Serialized)\n"
+    "                    {\n"
+    "                        Local1 = (ECRD (RefOf (AWHG)) << 0x08)\n"
+    "                        Local1 += ECRD (RefOf (AWLW))\n"
+    "                        If (((ECRD (RefOf (ECWR)) & One) || (Local1 > 0x32)))\n"
+    "                        {\n"
+    "                            If ((ToInteger (Arg0) == Zero))\n"
+    "                            {\n"
+    "                                THMD (0x14)\n"
+    "                            }\n"
+    "                            Else\n"
+    "                            {\n"
+    "                                THMD (Zero)\n"
+    "                            }\n"
+    "\n"
+    "                            MSPL ()\n"
+    "                            MFPT ()\n"
+    "                        }\n"
+    "                        Else\n"
+    "                        {\n"
+    "                            THMD (0x03)\n"
+    "                        }\n"
+    "                    }\n"
+    "\n"
+    "                    Method (MSPL, 0, Serialized)\n"
+    "                    {\n"
+    "                        Local0 = ECRD (RefOf (CSPL))\n"
+    "                        Local1 = (ECRD (RefOf (AWHG)) << 0x08)\n"
+    "                        Local1 += ECRD (RefOf (AWLW))\n"
+    "                        If (((ECRD (RefOf (ECWR)) & One) || (Local1 > 0x32)))\n"
+    "                        {\n"
+    "                            If ((Local0 < 0x50))\n"
+    "                            {\n"
+    "                                Local0 = 0x50\n"
+    "                            }\n"
+    "                        }\n"
+    "\n"
+    "                        Local0 *= 0x03E8\n"
+    "                        MODP (0x05, Local0)\n"
+    "                        MODP (0x07, Local0)\n"
+    "                        MODP (0x13, Local0)\n"
+    "                    }\n"
+    "\n"
+    "                    Method (MFPT, 0, Serialized)\n"
+    "                    {\n"
+    "                        Local0 = ECRD (RefOf (FPPT))\n"
+    "                        Local1 = (ECRD (RefOf (AWHG)) << 0x08)\n"
+    "                        Local1 += ECRD (RefOf (AWLW))\n"
+    "                        If (((ECRD (RefOf (ECWR)) & One) || (Local1 > 0x32)))\n"
+    "                        {\n"
+    "                            If ((Local0 < 0x6E))\n"
+    "                            {\n"
+    "                                Local0 = 0x6E\n"
+    "                            }\n"
+    "                        }\n"
+    "\n"
+    "                        Local0 *= 0x03E8\n"
+    "                        MODP (0x06, Local0)\n"
+    "                    }\n"
+)
+
+# _Q10 replacement: AC/battery transition handler with battery-borrowing immunity
+_Q10_NEW_BODY = (
+    "                    Method (_Q10, 0, NotSerialized)  // _Qxx: EC Query, xx=0x00-0xFF\n"
+    "                    {\n"
+    "                        Sleep (0x012C)\n"
+    "                        Notify (BAT0, 0x80) // Status Change\n"
+    "                        Notify (ADP1, 0x80) // Status Change\n"
+    "                        Local1 = (ECRD (RefOf (AWHG)) << 0x08)\n"
+    "                        Local1 += ECRD (RefOf (AWLW))\n"
+    "                        If (((ECRD (RefOf (ECWR)) & One) || (Local1 > 0x32)))\n"
+    "                        {\n"
+    "                            Local0 = ECRD (RefOf (ITSM))\n"
+    "                            FNQS (Local0)\n"
+    "                        }\n"
+    "                        Else\n"
+    "                        {\n"
+    "                            If ((ECRD (RefOf (CMEN)) == One))\n"
+    "                            { \n"
+    "                                ECWT (Zero, RefOf (CMEN))\n"
+    "                            }\n"
+    "\n"
+    "                            Local0 = ECRD (RefOf (ITSM))\n"
+    "                            FNQS (Local0)\n"
+    "                        }\n"
+    "\n"
+    "                        Local0 = ECRD (RefOf (ITSM))\n"
+    "                        ^^^WMID.EVBU [Zero] = One\n"
+    "                        ^^^WMID.EVBU [One] = 0x0F\n"
+    "                        ^^^WMID.EVBU [0x02] = Local0\n"
+    "                        Notify (WMID, 0x20) // Reserved\n"
+    "                    }\n"
+)
+
+# ADP1._PSR replacement:
+# Accurately reports AC connected if ECWR bit 0 is set OR adapter wattage > 50W.
+# When a 280W adapter is plugged in, dual-load borrowing will never drop Windows to DC mode!
+# Completely omits ^^PCI0.GP17.VGA.AFN4 (0x02) to prevent GPU 40W clock clamping.
+ADP1_PSR_NEW_BODY = (
+    "                        Method (_PSR, 0, NotSerialized)  // _PSR: Power Source\n"
+    "                        {\n"
+    "                            Local1 = (^^PCI0.LPC0.H_EC.ECRD (RefOf (^^PCI0.LPC0.H_EC.AWHG)) << 0x08)\n"
+    "                            Local1 += ^^PCI0.LPC0.H_EC.ECRD (RefOf (^^PCI0.LPC0.H_EC.AWLW))\n"
+    "                            If (((^^PCI0.LPC0.H_EC.ECRD (RefOf (^^PCI0.LPC0.H_EC.ECWR)) & One) || (Local1 > 0x32)))\n"
+    "                            {\n"
+    "                                Local0 = One\n"
+    "                            }\n"
+    "                            Else\n"
+    "                            {\n"
+    "                                Local0 = Zero\n"
+    "                            }\n"
+    "\n"
+    "                            If (((Local0 != ACDC) || (ACDC == 0xFF)))\n"
+    "                            {\n"
+    "                                CreateWordField (XX00, Zero, SSZE)\n"
+    "                                CreateByteField (XX00, 0x02, ACST)\n"
+    "                                SSZE = 0x03\n"
+    "                                ACDC = Local0\n"
+    "                                If (ACDC)\n"
+    "                                {\n"
+    "                                    P80H = 0xECAC\n"
+    "                                    ^^PCI0.GP17.VGA.AFN4 (One)\n"
+    "                                    ACST = Zero\n"
+    "                                }\n"
+    "                                Else\n"
+    "                                {\n"
+    "                                    P80H = 0xECDC\n"
+    "                                    ACST = One\n"
+    "                                }\n"
+    "\n"
+    "                                ALIB (One, XX00)\n"
+    "                            }\n"
+    "\n"
+    "                            Return (Local0)\n"
+    "                        }\n"
+)
 
 
-def apply_edits(src_name, edits, out_name):
+def replace_dsdt_power_methods(text):
+    """Replace FNQS, _Q10, and ADP1._PSR in DSDT."""
+    # 1. FNQS + MSPL + MFPT replacement
+    fnqs_start = "                    Method (FNQS, 1, Serialized)\n"
+    fnqs_end = "\n\n                    Method (COMM, 0, Serialized)"
+    i = text.find(fnqs_start)
+    j = text.find(fnqs_end, i) if i >= 0 else -1
+    if i < 0 or j < 0:
+        sys.exit("[-] dsdt: FNQS/COMM method pair not found")
+    text = text[:i] + FNQS_MSPL_MFPT_NEW_BODY + text[j:]
+
+    # 2. _Q10 replacement
+    q10_start = "                    Method (_Q10, 0, NotSerialized)  // _Qxx: EC Query, xx=0x00-0xFF\n"
+    q10_end = "\n\n                    Method (_Q11, 0, NotSerialized)"
+    i = text.find(q10_start)
+    j = text.find(q10_end, i) if i >= 0 else -1
+    if i < 0 or j < 0:
+        sys.exit("[-] dsdt: _Q10/_Q11 method pair not found")
+    text = text[:i] + _Q10_NEW_BODY + text[j:]
+
+    # 3. ADP1._PSR replacement
+    psr_start = "                        Method (_PSR, 0, NotSerialized)  // _PSR: Power Source\n"
+    psr_end = "\n\n                        Method (_PCL, 0, NotSerialized)"
+    i = text.find(psr_start)
+    j = text.find(psr_end, i) if i >= 0 else -1
+    if i < 0 or j < 0:
+        sys.exit("[-] dsdt: ADP1._PSR/_PCL method pair not found")
+    text = text[:i] + ADP1_PSR_NEW_BODY + text[j:]
+
+    return text
+
+
+def apply_edits(src_name, edits, out_name, transform=None):
     src_path = os.path.join(SRC_ACPI, src_name)
     out_path = os.path.join(OUT_DIR, out_name)
 
@@ -108,6 +247,9 @@ def apply_edits(src_name, edits, out_name):
             lines[idx] = new + "\n"
 
     out_lines = [l for l in lines if l is not None]
+    if transform is not None:
+        joined = transform("".join(out_lines))
+        out_lines = joined.splitlines(keepends=True)
 
     os.makedirs(OUT_DIR, exist_ok=True)
     with open(out_path, "w", encoding="utf-8", newline="\n") as f:
@@ -119,7 +261,9 @@ def apply_edits(src_name, edits, out_name):
 
 def main():
     p1 = apply_edits("ssdt4.dsl", SSDT4_EDITS, "ssdt4_patched.dsl")
-    p2 = apply_edits("dsdt.dsl", DSDT_EDITS, "dsdt_patched.dsl")
+    p2 = apply_edits("dsdt.dsl", DSDT_EDITS, "dsdt_patched.dsl",
+                     transform=replace_dsdt_power_methods)
+    print("[+] dsdt_patched.dsl: FNQS/_Q10/ADP1._PSR replaced (battery drop lock eliminated)")
     print("[+] Done. Compile with iASL:")
     print(f"    iasl -p build/ssdt4_patched -tc {p1}")
     print(f"    iasl -p build/dsdt_patched  -tc {p2}")

@@ -36,7 +36,7 @@ if %errorlevel% neq 0 (
 )
 
 echo [+] Converting BMF to ASL buffer...
-powershell -NoProfile -Command "$b=[System.IO.File]::ReadAllBytes('build\SsdtUnlockDB.bmf'); $h=($b | ForEach-Object { '0x{0:X2}' -f $_ }) -join ', '; $c=\"// Auto-generated. Do not edit.`r`nName (WQBA, Buffer ()`r`n{`r`n    $h`r`n})\" ; [System.IO.File]::WriteAllText('build\BmfData.asl', $c)"
+python -c "b=open('build/SsdtUnlockDB.bmf','rb').read(); open('build/BmfData.asl','w').write('// Auto-generated. Do not edit.\nName (WQBA, Buffer ()\n{\n    ' + ', '.join('0x{:02X}'.format(x) for x in b) + '\n})\n')"
 if %errorlevel% neq 0 (
     echo [-] Error: BMF to ASL conversion failed.
     pause
@@ -58,7 +58,7 @@ if %IASL_ERROR% neq 0 (
 )
 
 echo [+] Compiling C sources...
-cl.exe /GS- /W4 /O2 /utf-8 /TC /c /Fobuild\obj\ src\main.c src\UefiHelpers.c src\Logging.c src\AcpiPatch.c
+cl.exe /GS- /W4 /O2 /utf-8 /TC /c /Fobuild\obj\ src\main.c src\UefiHelpers.c src\Logging.c src\AcpiPatch.c src\BootIcon.c
 if %errorlevel% neq 0 (
     echo.
     echo [-] Error: Compilation failed.
@@ -68,7 +68,7 @@ if %errorlevel% neq 0 (
 
 :: Link to BOOTX64.efi
 echo [+] Linking...
-link.exe /subsystem:efi_application /entry:efi_main /nodefaultlib /dll /out:build\BOOTX64.efi build\obj\main.obj build\obj\UefiHelpers.obj build\obj\Logging.obj build\obj\AcpiPatch.obj
+link.exe /subsystem:efi_application /entry:efi_main /nodefaultlib /dll /out:build\BOOTX64.efi build\obj\main.obj build\obj\UefiHelpers.obj build\obj\Logging.obj build\obj\AcpiPatch.obj build\obj\BootIcon.obj
 if %errorlevel% neq 0 (
     echo.
     echo [-] Error: Linking failed.

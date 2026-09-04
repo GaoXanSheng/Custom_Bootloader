@@ -7,25 +7,16 @@
 #include "../build/dsdt_patched.hex"
 
 // ---------------------------------------------------------------------------
-// Dual-channel ACPI patching
+// ACPI Table Replacement & In-place Patching
 //
-// 1) Table Replacement (整表替换, ReplaceAcpiTables): target tables are
-//    patched at the ASL source level, compiled offline by iASL into legal AML
-//    (src/acpi/patched/*.dsl -> build/*.hex), and swapped in wholesale via
-//    XSDT/FACP pointer redirection. Consumers that re-read the tables from
-//    RSDP at boot (Windows ACPICA) see the new tables; the firmware AML is
-//    never modified, so WMI device registration (e.g. \_SB.PCI0.WMID /
-//    MICommonInterface) can no longer be broken by malformed patch bytes.
+// 1) Whole-Table Replacement (ReplaceAcpiTables):
+//    Patched tables (DSDT, SSDT4) are compiled offline by iASL into compliant AML
+//    and injected via XSDT / FACP pointer redirection. When the OS ACPI driver
+//    initializes tables from RSDP, it uses the replacement tables.
 //
-// 2) In-place patching (原地补丁, PatchTablesInPlace): firmware-side
-//    consumers (Insyde SMM / EC arbitration) bound themselves to the ORIGINAL
-//    DSDT/SSDT4 physical pages at POST and never follow pointer redirection,
-//    so replacement alone leaves the power/thermal control logic running
-//    from the old pages. Equal-size byte patches (src/InplacePatches.h,
-//    occurrence counts verified) are therefore applied directly to the
-//    original tables, whose checksums are recomputed in place. Windows
-//    follows the new pointers (channel 1) and the firmware sees the patched
-//    original bytes (channel 2); both deliver the same logic changes.
+// 2) Optional In-place Byte Patching (PatchTablesInPlace):
+//    Applies size-preserving byte patches directly to original table pages as a
+//    fallback pass.
 // ---------------------------------------------------------------------------
 
 #define OEM_TABLE_ID_EDK2    0x20202020324B4445ULL   // "EDK2    " (little-endian)
@@ -78,18 +69,73 @@ static void SignatureToStr(UINT32 Signature, CHAR16 *Str)
     Str[4] = 0;
 }
 
-
-static BOOLEAN IsValidAcpiPointer(VOID *Ptr)
+// Read the DSDT physical address out of a FACP, honoring field presence:
+//   DSDT  (32-bit, offset 40) requires Length >= 44
+//   X_DSDT (64-bit, offset 140, revision >= 2) requires Length >= 148
+// Unconditional reads at +140 (previous code) could walk off a short FACP.
+static UINT64 ReadFacpDsdtAddress(const EFI_ACPI_SDT_HEADER *Facp)
 {
-    UINT64 Addr = (UINT64)Ptr;
+    if (Facp->Length >= 148) {
+        UINT64 Addr = *(UINT64 *)((UINT8 *)Facp + 140);
+        if (Addr != 0) {
+            return Addr;
+        }
+    }
+    if (Facp->Length >= 44) {
+        return *(UINT32 *)((UINT8 *)Facp + 40);
+    }
+    return 0;
+}
 
-    if (Ptr == NULL) return FALSE;
+// Keep the ACPI 1.0 RSDT in step with the XSDT after whole-table swaps.
+// Windows x64 consumes the XSDT, but a fallback reader that still walks the
+// RSDT must not end up at the stale originals. 32-bit RSDT entries can only
+// hold addresses below 4 GiB; entries above that are left untouched.
+static VOID SyncRsdt(
+    EFI_SYSTEM_TABLE *SystemTable,
+    EFI_HANDLE ImageHandle,
+    EFI_ACPI_2_0_ROOT_SYSTEM_DESCRIPTION_POINTER *Rsdp,
+    const UINT64 *OldAddrs,
+    const UINT64 *NewAddrs,
+    UINTN SwapCount
+)
+{
+    EFI_ACPI_SDT_HEADER *Rsdt;
+    UINT32 *EntryPtr;
+    UINTN EntryCount;
+    UINTN Index;
+    UINTN k;
+    UINTN Updated = 0;
 
-    if ((Addr & 3) != 0) return FALSE;
+    if (Rsdp->RsdtAddress == 0 || SwapCount == 0) {
+        return;
+    }
 
-    if (Addr < 0x100000ULL || Addr > 0x4000000000ULL) return FALSE;
+    Rsdt = (EFI_ACPI_SDT_HEADER *)(UINTN)Rsdp->RsdtAddress;
+    if (!IsValidAcpiPointer(Rsdt) || Rsdt->Signature != 0x54445352) { // "RSDT"
+        LogToFile(SystemTable, ImageHandle, L"[-] Warn: RSDT not found/valid - skipped RSDT sync.");
+        return;
+    }
 
-    return TRUE;
+    EntryCount = (Rsdt->Length - sizeof(EFI_ACPI_SDT_HEADER)) / sizeof(UINT32);
+    EntryPtr = (UINT32 *)((UINT8 *)Rsdt + sizeof(EFI_ACPI_SDT_HEADER));
+
+    for (Index = 0; Index < EntryCount; Index++) {
+        for (k = 0; k < SwapCount; k++) {
+            if ((UINT32)OldAddrs[k] == EntryPtr[Index] && NewAddrs[k] <= 0xFFFFFFFFULL) {
+                EntryPtr[Index] = (UINT32)NewAddrs[k];
+                Updated++;
+            }
+        }
+    }
+
+    if (Updated > 0) {
+        Rsdt->Checksum = 0;
+        Rsdt->Checksum = CalculateChecksum8((UINT8 *)Rsdt, Rsdt->Length);
+        LogToFile(SystemTable, ImageHandle, L"[+] RSDT entries synced to replacement tables.");
+    } else {
+        LogToFile(SystemTable, ImageHandle, L"[-] Warn: RSDT contained no matching entries to sync.");
+    }
 }
 
 static BOOLEAN ContainsBytes(
@@ -331,14 +377,9 @@ EFI_STATUS PatchTablesInPlace(
 
         if (Table->Signature == ACPI_SIG_FACP && DsdtTable == NULL) {
             // DSDT is referenced from FACP, not from the XSDT directly.
-            UINT64 *XDsdtPtr = (UINT64 *)((UINT8 *)Table + 140);
-            UINT32 *DsdtPtr = (UINT32 *)((UINT8 *)Table + 40);
-            UINT64 Addr = *XDsdtPtr;
+            UINT64 Addr = ReadFacpDsdtAddress(Table);
             EFI_ACPI_SDT_HEADER *Dsdt;
 
-            if (Addr == 0) {
-                Addr = *DsdtPtr;
-            }
             if (Addr == 0) {
                 continue;
             }
@@ -422,9 +463,24 @@ EFI_STATUS PatchTablesInPlace(
         LogToFile(SystemTable, ImageHandle, L"[+] InPlace: original SSDT4 checksum recomputed in place.");
     }
 
-    if (PatchesApplied == 0 && PatchesSkipped == 0) {
-        LogToFile(SystemTable, ImageHandle, L"[-] Warn: no in-place patches evaluated.");
+    if (DsdtTable == NULL && Ssdt4Table == NULL) {
+        ConsolePrint(SystemTable,
+                     L"  [-] ALARM: in-place patch targets NOT FOUND (neither original DSDT "
+                     L"nor SSDT4). BIOS version changed?\r\n",
+                     TRUE);
+        LogToFile(SystemTable, ImageHandle,
+                  L"[-] ALARM: no in-place target tables located (DSDT/SSDT4).");
         return EFI_NOT_FOUND;
+    }
+
+    if (PatchesApplied == 0) {
+        LogToFile(SystemTable, ImageHandle,
+                  L"[I] In-place patch pass: 0 patches applied (relies on table replacement).");
+        return EFI_SUCCESS;
+    }
+
+    if (PatchesSkipped != 0) {
+        LogToFile(SystemTable, ImageHandle, L"[-] Warn: some in-place patches were skipped.");
     }
 
     LogToFile(SystemTable, ImageHandle, L"[+] In-place patch pass finished.");
@@ -494,6 +550,40 @@ EFI_STATUS InjectSsdt(
         }
         Rsdp->ExtendedChecksum = 0;
         Rsdp->ExtendedChecksum = CalculateChecksum8((UINT8 *)Rsdp, RsdpLength);
+
+        // Best effort: keep ACPI 1.0 RSDT fallback readers aware of the newly
+        // injected SSDT. Only possible when the allocation fits in 32 bits.
+        if (AllocateAddr <= 0xFFFFFFFFULL && Rsdp->RsdtAddress != 0) {
+            EFI_ACPI_SDT_HEADER *OldRsdt =
+                (EFI_ACPI_SDT_HEADER *)(UINTN)Rsdp->RsdtAddress;
+            if (IsValidAcpiPointer(OldRsdt) && OldRsdt->Signature == 0x54445352) {
+                UINTN OldRsdtLength = OldRsdt->Length;
+                UINTN NewRsdtLength = OldRsdtLength + sizeof(UINT32);
+                UINTN RsdtPagesNeeded = (NewRsdtLength + 4095) / 4096;
+                EFI_PHYSICAL_ADDRESS NewRsdtAddr = 0;
+                EFI_ACPI_SDT_HEADER *NewRsdt;
+
+                Status = BS->AllocatePages(0, 9, RsdtPagesNeeded, &NewRsdtAddr);
+                if (!EFI_ERROR(Status)) {
+                    NewRsdt = (EFI_ACPI_SDT_HEADER *)NewRsdtAddr;
+                    UefiMemcpy(NewRsdt, OldRsdt, OldRsdtLength);
+                    *(UINT32 *)((UINT8 *)NewRsdt + OldRsdtLength) = (UINT32)AllocateAddr;
+                    NewRsdt->Length = (UINT32)NewRsdtLength;
+                    NewRsdt->Checksum = 0;
+                    NewRsdt->Checksum = CalculateChecksum8((UINT8 *)NewRsdt, NewRsdtLength);
+                    Rsdp->RsdtAddress = (UINT32)NewRsdtAddr;
+                    Rsdp->Checksum = 0;
+                    Rsdp->Checksum = CalculateChecksum8((UINT8 *)Rsdp, 20);
+                    Rsdp->ExtendedChecksum = 0;
+                    Rsdp->ExtendedChecksum = CalculateChecksum8((UINT8 *)Rsdp, RsdpLength);
+                    LogToFile(SystemTable, ImageHandle,
+                              L"[+] RSDT extended with injected SSDT entry.");
+                } else {
+                    LogToFile(SystemTable, ImageHandle,
+                              L"[-] Warn: RSDT extend failed (non-fatal).");
+                }
+            }
+        }
     }
 
     LogToFile(SystemTable, ImageHandle, L"[+] Custom SSDT-UnlockDB table injected successfully.");
@@ -516,6 +606,9 @@ EFI_STATUS ReplaceAcpiTables(
     UINT64 *EntryPtr;
     UINTN Index;
     BOOLEAN ReplacedAny = FALSE;
+    UINT64 OldAddrs[8];
+    UINT64 NewAddrs[8];
+    UINTN SwapCount = 0;
 
     if (Xsdt == NULL || Xsdt->Signature != 0x54445358) { // "XSDT"
         LogToFile(SystemTable, ImageHandle, L"[-] Error: Invalid XSDT signature during table replacement scan.");
@@ -554,6 +647,8 @@ EFI_STATUS ReplaceAcpiTables(
         LogToFile(SystemTable, ImageHandle, LogBuf);
 
         if (Table->Signature == ACPI_SIG_SSDT) {
+            UINT64 OldEntry = EntryPtr[Index];
+
             Spec = FindReplacement(ACPI_SIG_SSDT, Table);
             if (Spec == NULL) {
                 continue;
@@ -563,7 +658,14 @@ EFI_STATUS ReplaceAcpiTables(
 
             if (ApplyReplacement(SystemTable, ImageHandle, Spec,
                                  &EntryPtr[Index], Spec->Name)) {
+                if (SwapCount < 8) {
+                    OldAddrs[SwapCount] = OldEntry;
+                    NewAddrs[SwapCount] = EntryPtr[Index];
+                    SwapCount++;
+                }
                 ReplacedAny = TRUE;
+                LogToFile(SystemTable, ImageHandle, L"[D] SSDT4 new table at:");
+                LogAddrToFile(SystemTable, ImageHandle, EntryPtr[Index]);
             }
         }
         else if (Table->Signature == ACPI_SIG_FACP) {
@@ -571,8 +673,6 @@ EFI_STATUS ReplaceAcpiTables(
             EFI_ACPI_SDT_HEADER *NewFacp = NULL;
             EFI_PHYSICAL_ADDRESS NewFacpAddr = 0;
             UINTN FacpPagesNeeded;
-            UINT64 *XDsdtPtr;
-            UINT32 *DsdtPtr;
             UINT64 DsdtPhysicalAddress;
             BOOLEAN DsdtReplaced = FALSE;
 
@@ -585,12 +685,7 @@ EFI_STATUS ReplaceAcpiTables(
             NewFacp = (EFI_ACPI_SDT_HEADER *)NewFacpAddr;
             UefiMemcpy(NewFacp, Table, Table->Length);
 
-            XDsdtPtr = (UINT64 *)((UINT8 *)NewFacp + 140);
-            DsdtPtr = (UINT32 *)((UINT8 *)NewFacp + 40);
-            DsdtPhysicalAddress = *XDsdtPtr;
-            if (DsdtPhysicalAddress == 0) {
-                DsdtPhysicalAddress = *DsdtPtr;
-            }
+            DsdtPhysicalAddress = ReadFacpDsdtAddress(NewFacp);
 
             if (DsdtPhysicalAddress != 0) {
                 EFI_ACPI_SDT_HEADER *DsdtTable = (EFI_ACPI_SDT_HEADER *)DsdtPhysicalAddress;
@@ -614,14 +709,24 @@ EFI_STATUS ReplaceAcpiTables(
                             NewDsdt->Checksum = 0;
                             NewDsdt->Checksum = CalculateChecksum8((UINT8 *)NewDsdt, NewDsdt->Length);
 
-                            *XDsdtPtr = (UINT64)NewDsdtAddr;
-                            if (DsdtPhysicalAddress <= 0xFFFFFFFF) {
-                                *DsdtPtr = (UINT32)NewDsdtAddr;
+                            // Redirect only the fields the FACP actually carries.
+                            if (NewFacp->Length >= 148) {
+                                *(UINT64 *)((UINT8 *)NewFacp + 140) = (UINT64)NewDsdtAddr;
+                            }
+                            if (NewFacp->Length >= 44 && NewDsdtAddr <= 0xFFFFFFFFULL) {
+                                *(UINT32 *)((UINT8 *)NewFacp + 40) = (UINT32)NewDsdtAddr;
                             }
 
                             LogToFile(SystemTable, ImageHandle, Spec->Name);
                             DsdtReplaced = TRUE;
+                            if (SwapCount < 8) {
+                                OldAddrs[SwapCount] = DsdtPhysicalAddress;
+                                NewAddrs[SwapCount] = (UINT64)NewDsdtAddr;
+                                SwapCount++;
+                            }
                             ReplacedAny = TRUE;
+                            LogToFile(SystemTable, ImageHandle, L"[D] New DSDT at:");
+                            LogAddrToFile(SystemTable, ImageHandle, (UINT64)NewDsdtAddr);
                         }
                     }
                 }
@@ -630,7 +735,14 @@ EFI_STATUS ReplaceAcpiTables(
             if (DsdtReplaced) {
                 NewFacp->Checksum = 0;
                 NewFacp->Checksum = CalculateChecksum8((UINT8 *)NewFacp, NewFacp->Length);
+                if (SwapCount < 8) {
+                    OldAddrs[SwapCount] = EntryPtr[Index];
+                    NewAddrs[SwapCount] = (UINT64)NewFacpAddr;
+                    SwapCount++;
+                }
                 EntryPtr[Index] = (UINT64)NewFacpAddr;
+                LogToFile(SystemTable, ImageHandle, L"[D] FACP shadow at:");
+                LogAddrToFile(SystemTable, ImageHandle, (UINT64)NewFacpAddr);
             } else {
                 BS->FreePages(NewFacpAddr, FacpPagesNeeded);
             }
@@ -641,9 +753,15 @@ EFI_STATUS ReplaceAcpiTables(
         Xsdt->Checksum = 0;
         Xsdt->Checksum = CalculateChecksum8((UINT8 *)Xsdt, Xsdt->Length);
         LogToFile(SystemTable, ImageHandle, L"[+] All ACPI table replacements applied successfully.");
+        SyncRsdt(SystemTable, ImageHandle, Rsdp, OldAddrs, NewAddrs, SwapCount);
         return EFI_SUCCESS;
     }
 
-    LogToFile(SystemTable, ImageHandle, L"[-] Warn: No target tables matched for replacement.");
-    return EFI_SUCCESS;
+    ConsolePrint(SystemTable,
+                 L"  [-] ALARM: ACPI table replacement matched NO target table "
+                 L"(DSDT/SSDT4). BIOS OEM ID/Revision changed?\r\n",
+                 TRUE);
+    LogToFile(SystemTable, ImageHandle,
+              L"[-] ALARM: no target tables matched for replacement.");
+    return EFI_NOT_FOUND;
 }

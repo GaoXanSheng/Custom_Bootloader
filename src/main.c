@@ -1,3 +1,4 @@
+#include "BootIcon.h"
 #include "UefiHelpers.h"
 #include "Logging.h"
 #include "AcpiPatch.h"
@@ -61,18 +62,35 @@ EFI_STATUS EFIAPI efi_main(
     SystemTable->ConOut->OutputString(SystemTable->ConOut, L"[+] Custom SSDT injected successfully.\r\n");
 
     Status = PatchTablesInPlace(SystemTable, ImageHandle, Rsdp);
-    if (EFI_ERROR(Status)) {
-        SystemTable->ConOut->OutputString(SystemTable->ConOut, L"[-] Warning: In-place patch pass did not complete.\r\n");
-    } else {
-        SystemTable->ConOut->OutputString(SystemTable->ConOut, L"[+] In-place patch pass applied to original tables.\r\n");
+    if (!EFI_ERROR(Status)) {
+        ConsolePrint(SystemTable, L"[+] In-place patch pass executed.\r\n", FALSE);
     }
 
     Status = ReplaceAcpiTables(SystemTable, ImageHandle, Rsdp);
     if (EFI_ERROR(Status)) {
-        SystemTable->ConOut->OutputString(SystemTable->ConOut, L"[-] Warning: ACPI table replacement failed to execute.\r\n");
+        ConsolePrint(SystemTable,
+                     L"  [-] ALARM: ACPI table replacement matched NO target table. "
+                     L"Check unlock.log / BIOS version.\r\n",
+                     TRUE);
+        LogToFile(SystemTable, ImageHandle,
+                  L"[-] ALARM: ACPI table replacement matched no target table.");
     } else {
-        SystemTable->ConOut->OutputString(SystemTable->ConOut, L"[+] ACPI table replacement logic evaluated.\r\n");
+        ConsolePrint(SystemTable,
+                     L"[+] ACPI table replacement applied (DSDT/SSDT4).\r\n", FALSE);
     }
+
+#if BOOT_ICON_REPLACE
+    // Replace UEFI boot logo via ACPI BGRT hijack and GOP Blt before chainloading.
+    // Cosmetic only: failure must be visible but must not block the boot.
+    Status = PatchBgrtAndDrawLogo(SystemTable, ImageHandle, Rsdp);
+    if (EFI_ERROR(Status)) {
+        LogToFile(SystemTable, ImageHandle,
+                  L"[-] Boot icon replacement failed (non-fatal).");
+    }
+#else
+    LogToFile(SystemTable, ImageHandle,
+              L"[I] Boot icon replacement disabled (BOOT_ICON_REPLACE=0).");
+#endif
 
     SystemTable->ConOut->OutputString(SystemTable->ConOut, L"[+] Chainloading Windows Boot Manager from ESP...\r\n");
     LogToFile(SystemTable, ImageHandle, L"[+] Chainloading Windows Boot Manager from ESP...");

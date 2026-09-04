@@ -23,6 +23,11 @@ typedef UINT64 EFI_PHYSICAL_ADDRESS;
 #endif
 
 #define EFI_SUCCESS 0
+#define EFI_INVALID_PARAMETER 0x8000000000000002ULL
+#define EFI_UNSUPPORTED 0x8000000000000003ULL
+#define EFI_BUFFER_TOO_SMALL 0x8000000000000005ULL
+#define EFI_DEVICE_ERROR 0x8000000000000007ULL
+#define EFI_OUT_OF_RESOURCES 0x8000000000000009ULL
 #define EFI_NOT_FOUND 0x800000000000000EULL
 #define EFI_ERROR(status) (((long long)(status)) < 0)
 
@@ -45,15 +50,71 @@ typedef struct _EFI_SYSTEM_TABLE EFI_SYSTEM_TABLE;
 typedef struct _EFI_BOOT_SERVICES EFI_BOOT_SERVICES;
 typedef struct _EFI_DEVICE_PATH_PROTOCOL EFI_DEVICE_PATH_PROTOCOL;
 
+typedef EFI_STATUS (EFIAPI *EFI_TEXT_RESET) (
+    EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *This,
+    BOOLEAN ExtendedVerification
+);
+
 typedef EFI_STATUS (EFIAPI *EFI_TEXT_STRING) (
     EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *This,
     CHAR16 *String
 );
 
+typedef EFI_STATUS (EFIAPI *EFI_TEXT_TEST_STRING) (
+    EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *This,
+    CHAR16 *String
+);
+
+typedef EFI_STATUS (EFIAPI *EFI_TEXT_QUERY_MODE) (
+    EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *This,
+    UINTN ModeNumber,
+    UINTN *Columns,
+    UINTN *Rows
+);
+
+typedef EFI_STATUS (EFIAPI *EFI_TEXT_SET_MODE) (
+    EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *This,
+    UINTN ModeNumber
+);
+
+typedef EFI_STATUS (EFIAPI *EFI_TEXT_SET_ATTRIBUTE) (
+    EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *This,
+    UINTN Attribute
+);
+
+typedef EFI_STATUS (EFIAPI *EFI_TEXT_CLEAR_SCREEN) (
+    EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *This
+);
+
+typedef EFI_STATUS (EFIAPI *EFI_TEXT_SET_CURSOR_POSITION) (
+    EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *This,
+    UINTN Column,
+    UINTN Row
+);
+
+typedef EFI_STATUS (EFIAPI *EFI_TEXT_ENABLE_CURSOR) (
+    EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *This,
+    BOOLEAN Visible
+);
+
 struct _EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL {
-    void* Reset;
-    EFI_TEXT_STRING OutputString; 
+    EFI_TEXT_RESET Reset;
+    EFI_TEXT_STRING OutputString;
+    EFI_TEXT_TEST_STRING TestString;
+    EFI_TEXT_QUERY_MODE QueryMode;
+    EFI_TEXT_SET_MODE SetMode;
+    EFI_TEXT_SET_ATTRIBUTE SetAttribute;
+    EFI_TEXT_CLEAR_SCREEN ClearScreen;
+    EFI_TEXT_SET_CURSOR_POSITION SetCursorPosition;
+    EFI_TEXT_ENABLE_CURSOR EnableCursor;
+    void *Mode;
 };
+
+// EFI text attributes (foreground | (background << 4)); used by ConsolePrint.
+#define EFI_BLACK        0x00
+#define EFI_RED          0x04
+#define EFI_LIGHTGRAY    0x07
+#define EFI_TEXT_ATTR(Foreground, Background) ((Foreground) | ((Background) << 4))
 
 #pragma pack(push, 1)
 
@@ -88,6 +149,17 @@ typedef struct {
     UINT8  ExtendedChecksum; 
     UINT8  Reserved[3];      
 } EFI_ACPI_2_0_ROOT_SYSTEM_DESCRIPTION_POINTER;
+
+// ACPI 5.0 Boot Graphics Resource Table (BGRT)
+typedef struct {
+    EFI_ACPI_SDT_HEADER Header;
+    UINT16 Version;         // 1
+    UINT8  Status;          // 1 = displayed
+    UINT8  ImageType;       // 0 = BMP
+    UINT64 ImageAddress;    // Physical address of the BMP image
+    UINT32 ImageOffsetX;    // X offset on screen
+    UINT32 ImageOffsetY;    // Y offset on screen
+} EFI_ACPI_5_0_BOOT_GRAPHICS_RESOURCE_TABLE;
 
 struct _EFI_DEVICE_PATH_PROTOCOL {
     UINT8 Type;
@@ -162,6 +234,76 @@ typedef struct {
     EFI_HANDLE DeviceHandle;
     EFI_DEVICE_PATH_PROTOCOL *FilePath;
 } EFI_LOADED_IMAGE_PROTOCOL;
+
+// ---------------------------------------------------------------------------
+// Graphics Output Protocol (GOP)
+// ---------------------------------------------------------------------------
+typedef struct {
+    UINT8 Blue;
+    UINT8 Green;
+    UINT8 Red;
+    UINT8 Reserved;
+} EFI_GRAPHICS_OUTPUT_BLT_PIXEL;
+
+typedef enum {
+    EfiBltVideoFill,
+    EfiBltVideoToBltBuffer,
+    EfiBltBufferToVideo,
+    EfiBltVideoToVideo,
+    EfiGraphicsOutputBltOperationMax
+} EFI_GRAPHICS_OUTPUT_BLT_OPERATION;
+
+typedef struct {
+    UINT32 Version;
+    UINT32 HorizontalResolution;
+    UINT32 VerticalResolution;
+    UINT32 PixelFormat;
+    UINT32 PixelInformation[3];
+    UINT32 PixelsPerScanLine;
+} EFI_GRAPHICS_OUTPUT_MODE_INFORMATION;
+
+typedef struct {
+    UINT32 MaxMode;
+    UINT32 Mode;
+    EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *Info;
+    UINTN SizeOfInfo;
+    EFI_PHYSICAL_ADDRESS FrameBufferBase;
+    UINTN FrameBufferSize;
+} EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE;
+
+typedef struct _EFI_GRAPHICS_OUTPUT_PROTOCOL EFI_GRAPHICS_OUTPUT_PROTOCOL;
+
+typedef EFI_STATUS (EFIAPI *EFI_GRAPHICS_OUTPUT_PROTOCOL_QUERY_MODE) (
+    EFI_GRAPHICS_OUTPUT_PROTOCOL *This,
+    UINT32 ModeNumber,
+    UINTN *SizeOfInfo,
+    EFI_GRAPHICS_OUTPUT_MODE_INFORMATION **Info
+);
+
+typedef EFI_STATUS (EFIAPI *EFI_GRAPHICS_OUTPUT_PROTOCOL_SET_MODE) (
+    EFI_GRAPHICS_OUTPUT_PROTOCOL *This,
+    UINT32 ModeNumber
+);
+
+typedef EFI_STATUS (EFIAPI *EFI_GRAPHICS_OUTPUT_PROTOCOL_BLT) (
+    EFI_GRAPHICS_OUTPUT_PROTOCOL *This,
+    EFI_GRAPHICS_OUTPUT_BLT_PIXEL *BltBuffer,
+    EFI_GRAPHICS_OUTPUT_BLT_OPERATION BltOperation,
+    UINTN SourceX,
+    UINTN SourceY,
+    UINTN DestinationX,
+    UINTN DestinationY,
+    UINTN Width,
+    UINTN Height,
+    UINTN Delta
+);
+
+struct _EFI_GRAPHICS_OUTPUT_PROTOCOL {
+    EFI_GRAPHICS_OUTPUT_PROTOCOL_QUERY_MODE QueryMode;
+    EFI_GRAPHICS_OUTPUT_PROTOCOL_SET_MODE SetMode;
+    EFI_GRAPHICS_OUTPUT_PROTOCOL_BLT Blt;
+    EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE *Mode;
+};
 
 typedef EFI_STATUS (EFIAPI *EFI_LOCATE_PROTOCOL) (
     EFI_GUID *Protocol,
@@ -271,10 +413,17 @@ struct _EFI_SYSTEM_TABLE {
     EFI_CONFIGURATION_TABLE *ConfigurationTable; 
 };
 
+extern EFI_GUID gEfiGraphicsOutputProtocolGuid;
+extern EFI_GUID gEfiAcpi20TableGuid;
+extern EFI_GUID gEfiLoadedImageProtocolGuid;
+extern EFI_GUID gEfiSimpleFileSystemProtocolGuid;
+extern EFI_GUID gEfiDevicePathProtocolGuid;
+
 void *UefiMemcpy(void *dest, const void *src, size_t count);
 void *memcpy(void *dest, const void *src, size_t count);
 UINT8 CalculateChecksum8(UINT8 *Buffer, UINTN Size);
 BOOLEAN CompareGuid(EFI_GUID *g1, EFI_GUID *g2);
+BOOLEAN IsValidAcpiPointer(VOID *Ptr);
 UINTN GetDevicePathSize(EFI_DEVICE_PATH_PROTOCOL *DevicePath);
 EFI_DEVICE_PATH_PROTOCOL *AppendFileNameToDevicePath(
     EFI_SYSTEM_TABLE *SystemTable,

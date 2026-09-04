@@ -1,5 +1,23 @@
 #include "Logging.h"
 
+void ConsolePrint(EFI_SYSTEM_TABLE *SystemTable, const CHAR16 *Message, BOOLEAN IsError)
+{
+    if (SystemTable == NULL || SystemTable->ConOut == NULL || Message == NULL) {
+        return;
+    }
+    if (SystemTable->ConOut->SetAttribute != NULL) {
+        SystemTable->ConOut->SetAttribute(
+            SystemTable->ConOut,
+            EFI_TEXT_ATTR(IsError ? EFI_RED : EFI_LIGHTGRAY, EFI_BLACK));
+    }
+    SystemTable->ConOut->OutputString(SystemTable->ConOut, (CHAR16 *)Message);
+    if (SystemTable->ConOut->SetAttribute != NULL) {
+        SystemTable->ConOut->SetAttribute(
+            SystemTable->ConOut,
+            EFI_TEXT_ATTR(EFI_LIGHTGRAY, EFI_BLACK));
+    }
+}
+
 void LogToFile(EFI_SYSTEM_TABLE *SystemTable, EFI_HANDLE ImageHandle, const CHAR16 *Message)
 {
     EFI_STATUS Status;
@@ -12,6 +30,7 @@ void LogToFile(EFI_SYSTEM_TABLE *SystemTable, EFI_HANDLE ImageHandle, const CHAR
     int i;
     UINTN WriteSize;
     static BOOLEAN LogInitialized = FALSE;
+    static BOOLEAN LogWarningShown = FALSE;
 
     BS = SystemTable->BootServices;
 
@@ -51,10 +70,41 @@ void LogToFile(EFI_SYSTEM_TABLE *SystemTable, EFI_HANDLE ImageHandle, const CHAR
         AsciiBuffer[i] = 0;
 
         WriteSize = i;
-        LogFile->Write(LogFile, &WriteSize, AsciiBuffer); 
-        LogFile->Close(LogFile);                          
+        Status = LogFile->Write(LogFile, &WriteSize, AsciiBuffer);
+        if (EFI_ERROR(Status) && !LogWarningShown) {
+            LogWarningShown = TRUE;
+            ConsolePrint(SystemTable,
+                         L"  [!] ALARM: cannot write \\EFI\\BOOT\\unlock.log (volume read-only?).\r\n",
+                         TRUE);
+        }
+        LogFile->Close(LogFile);
+    } else if (!LogWarningShown) {
+        // \EFI\BOOT may not exist (non-standard deployment) or the ESP is
+        // read-only: say so ONCE instead of failing silently every line.
+        LogWarningShown = TRUE;
+        ConsolePrint(SystemTable,
+                     L"  [!] ALARM: cannot open \\EFI\\BOOT\\unlock.log - logs disabled. "
+                     L"Deploy via DbgTool so \\EFI\\BOOT exists.\r\n",
+                     TRUE);
     }
     RootDir->Close(RootDir);                              
+}
+
+void LogAddrToFile(EFI_SYSTEM_TABLE *SystemTable, EFI_HANDLE ImageHandle, UINT64 Addr)
+{
+    CHAR16 Buf[24];
+    int i;
+    CHAR16 HexChars[] = L"0123456789ABCDEF";
+
+    Buf[0] = L' ';
+    Buf[1] = L' ';
+    Buf[2] = L'0';
+    Buf[3] = L'x';
+    for (i = 0; i < 16; i++) {
+        Buf[4 + i] = HexChars[(Addr >> (60 - i * 4)) & 0xF];
+    }
+    Buf[20] = 0;
+    LogToFile(SystemTable, ImageHandle, Buf);
 }
 
 void StatusToHex(EFI_STATUS Status, CHAR16 *Buffer)

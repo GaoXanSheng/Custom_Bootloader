@@ -48,21 +48,21 @@ class CustomDbUnlock {
     void GetEcRegister([in] uint32 RegisterOffset, [out] uint32 ReadVal);
 
     // ==========================================
-    // 域 5: WMI 动态持久化覆盖锁掩码 (WMOV)
+    // 域 5: 覆盖锁掩码 (WMOV)
     // ==========================================
-    [WmiMethodId(10), Implemented, Description("Set WMI Override Persistence Lock Mask")]
+    [WmiMethodId(10), Implemented, Description("Set Override Lock Mask")]
     void SetOverrideLock([in] uint32 LockMask, [out] uint32 Status);
 
-    [WmiMethodId(11), Implemented, Description("Get WMI Override Persistence Lock Mask")]
+    [WmiMethodId(11), Implemented, Description("Get Override Lock Mask")]
     void GetOverrideLock([out] uint32 LockMask);
 
     // ==========================================
-    // 域 6: 软件 SMI (0xB2 Port) 命令提交与状态
+    // 域 6: SMI 状态变量 (WSMI)
     // ==========================================
-    [WmiMethodId(12), Implemented, Description("Trigger Software SMI Command")]
+    [WmiMethodId(12), Implemented, Description("Set SMI Debug Variable")]
     void SetSwSmi([in] uint32 SmiCmd, [in] uint32 SmiArg, [out] uint32 Status);
 
-    [WmiMethodId(13), Implemented, Description("Get Software SMI Last Execution Status")]
+    [WmiMethodId(13), Implemented, Description("Get SMI Debug Variable Status")]
     void GetSwSmiStatus([out] uint32 Status);
 
     // ==========================================

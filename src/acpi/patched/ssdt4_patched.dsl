@@ -1150,7 +1150,7 @@ DefinitionBlock ("", "SSDT", 1, "INSYDE", "EDK2    ", 0x00001000)
             Name (DBDC, Zero)
             Name (AMAT, 0x78)
             Name (AMIT, 0xFF88)
-            Name (ATPP, 0x01E0)
+            Name (ATPP, 0x01B8)
             Name (ATP2, 0x0208)
             Name (DTPP, 0x0104)
             Name (TPPL, Zero)
@@ -1274,7 +1274,7 @@ DefinitionBlock ("", "SSDT", 1, "INSYDE", "EDK2    ", 0x00001000)
                                 ElseIf ((\_SB.PCI0.LPC0.H_EC.ECRD (RefOf (\_SB.PCI0.LPC0.H_EC.ITSM)) == Zero))
                                 {
                                     DBAC = Zero
-                                    TGPA = 0x8C
+                                    TGPA = 0x78
                                     MIGA = Zero
                                     MAGA = 0xC8
                                     TPPA = ATPP /* \_SB_.NPCF.ATPP */
@@ -1282,8 +1282,10 @@ DefinitionBlock ("", "SSDT", 1, "INSYDE", "EDK2    ", 0x00001000)
                                 Else
                                 {
                                     DBAC = Zero
-                                    TGPA = 0x64
-                                    TPPA = 0x01B8
+                                    TGPA = 0x0118
+                                    MIGA = Zero
+                                    MAGA = 0xC8
+                                    TPPA = ATPP
                                 }
                             }
                             Else
@@ -1305,7 +1307,7 @@ DefinitionBlock ("", "SSDT", 1, "INSYDE", "EDK2    ", 0x00001000)
                                 ElseIf ((\_SB.PCI0.LPC0.H_EC.ECRD (RefOf (\_SB.PCI0.LPC0.H_EC.ITSM)) == Zero))
                                 {
                                     DBAC = Zero
-                                    TGPA = 0x8C
+                                    TGPA = 0x78
                                     MIGA = Zero
                                     MAGA = 0xC8
                                     TPPA = ATPP /* \_SB_.NPCF.ATPP */
@@ -1313,8 +1315,10 @@ DefinitionBlock ("", "SSDT", 1, "INSYDE", "EDK2    ", 0x00001000)
                                 Else
                                 {
                                     DBAC = Zero
-                                    TGPA = 0x64
-                                    TPPA = 0x01B8
+                                    TGPA = 0x0118
+                                    MIGA = Zero
+                                    MAGA = 0xC8
+                                    TPPA = ATP2
                                 }
                             }
 
@@ -1492,7 +1496,7 @@ DefinitionBlock ("", "SSDT", 1, "INSYDE", "EDK2    ", 0x00001000)
                             }
                             Case (One)
                             {
-                                If ((IOBS != Zero))
+                                If (Zero)
                                 {
                                     OperationRegion (NVIO, SystemIO, IOBS, 0x10)
                                     Field (NVIO, ByteAcc, NoLock, Preserve)
@@ -1500,6 +1504,7 @@ DefinitionBlock ("", "SSDT", 1, "INSYDE", "EDK2    ", 0x00001000)
                                         CPUC,   8
                                     }
 
+                                    CPUC = NCHP /* \_SB_.NPCF.NPCF.NCHP */
                                     F6MP = Zero
                                     F6NP = Zero
                                     F6O2 = Zero
