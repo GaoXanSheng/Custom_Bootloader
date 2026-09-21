@@ -88,7 +88,7 @@ set_target_properties(BOOTX64 PROPERTIES
 add_dependencies(BOOTX64 version_gen thmp_config_gen)
 
 # ---------------------------------------------------------------------------
-# DbgTool（Windows 侧 WMI 工具，csc 编译；compile.bat 自带版本戳生成）
+# DbgTool（Windows 侧部署与引导管理工具，csc 编译；compile.bat 自带版本戳生成）
 # ---------------------------------------------------------------------------
 add_custom_target(DbgTool ALL
     COMMAND cmd /c compile.bat

@@ -31,7 +31,7 @@ if not exist "..\..\build" mkdir "..\..\build"
 
 "%CSC%" /nologo /codepage:65001 /target:exe /platform:anycpu ^
   /out:..\..\build\DbgTool.exe ^
-  /r:System.dll /r:System.Core.dll /r:System.Management.dll ^
+  /r:System.dll /r:System.Core.dll ^
   Program.cs VersionInfo.cs Common\*.cs Core\*.cs
 
 if errorlevel 1 (

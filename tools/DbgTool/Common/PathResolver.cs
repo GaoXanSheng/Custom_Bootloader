@@ -1,9 +1,8 @@
 // ============================================================================
 // DbgTool — 路径与资源定位解析器
-// 彻底解决 build\ / tools\DbgTool\ / 根目录 多种运行路径下的资源定位 Bug
+// 彻底解决 build\ / tools\DbgTool\ / 根目录 多种运行路径下的资源定位
 // ============================================================================
 using System;
-using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 
@@ -51,78 +50,41 @@ namespace DbgTool.Common
 
         public static string FindVersionFile()
         {
-            // 候选 1: build\version.txt
-            string p1 = Path.Combine(ProjectRoot, "build", "version.txt");
-            if (File.Exists(p1)) return p1;
+            string[] candidates = {
+                Path.Combine(ProjectRoot, "build", "version.txt"),
+                Path.Combine(ProjectRoot, "version.txt"),
+                Path.Combine(AppDir, "version.txt")
+            };
 
-            // 候选 2: 根目录下 version.txt
-            string p2 = Path.Combine(ProjectRoot, "version.txt");
-            if (File.Exists(p2)) return p2;
-
-            // 候选 3: AppDir 同级
-            string p3 = Path.Combine(AppDir, "version.txt");
-            if (File.Exists(p3)) return p3;
-
+            foreach (string p in candidates)
+            {
+                if (File.Exists(p)) return Path.GetFullPath(p);
+            }
             return null;
         }
 
-        public static string[] FindEfiCandidates()
+        public static string FindEfiFile()
         {
-            var list = new List<string>();
+            string[] candidates = {
+                Path.Combine(ProjectRoot, "build", "BOOTX64.efi"),
+                Path.Combine(AppDir, "BOOTX64.efi"),
+                Path.Combine(Environment.CurrentDirectory, "BOOTX64.efi"),
+                Path.Combine(ProjectRoot, "BOOTX64.efi")
+            };
 
-            AddIfExists(list, Path.Combine(ProjectRoot, "build", "BOOTX64.efi"));
-            AddIfExists(list, Path.Combine(AppDir, "BOOTX64.efi"));
-            AddIfExists(list, Path.Combine(Environment.CurrentDirectory, "BOOTX64.efi"));
-            AddIfExists(list, Path.Combine(ProjectRoot, "BOOTX64.efi"));
-
-            // 递归搜索 ProjectRoot 下的 build 目录
-            string buildDir = Path.Combine(ProjectRoot, "build");
-            if (Directory.Exists(buildDir))
+            foreach (string p in candidates)
             {
-                CollectRecursive(list, buildDir, 0, 2);
-            }
-
-            // 去重
-            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var result = new List<string>();
-            foreach (string p in list)
-            {
-                if (seen.Add(p)) result.Add(p);
-            }
-            return result.ToArray();
-        }
-
-        private static void AddIfExists(List<string> list, string path)
-        {
-            try
-            {
-                if (File.Exists(path))
+                if (File.Exists(p))
                 {
-                    list.Add(Path.GetFullPath(path));
+                    try
+                    {
+                        var fi = new FileInfo(p);
+                        if (fi.Length > 0) return Path.GetFullPath(p);
+                    }
+                    catch { }
                 }
             }
-            catch { }
-        }
-
-        private static void CollectRecursive(List<string> list, string root, int depth, int maxDepth)
-        {
-            if (depth > maxDepth) return;
-            try
-            {
-                string[] files = Directory.GetFiles(root, "BOOTX64.efi");
-                foreach (string f in files)
-                {
-                    AddIfExists(list, f);
-                }
-
-                string[] dirs = Directory.GetDirectories(root);
-                foreach (string d in dirs)
-                {
-                    if (d.IndexOf(".git", StringComparison.OrdinalIgnoreCase) >= 0) continue;
-                    CollectRecursive(list, d, depth + 1, maxDepth);
-                }
-            }
-            catch { }
+            return null;
         }
     }
 }

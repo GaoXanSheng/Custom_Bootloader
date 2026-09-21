@@ -1,6 +1,6 @@
 // ============================================================================
 // DbgTool — BCD 固件引导项管理器
-// 基于 ExitCode 与输出特征双重判定，彻底兼容多语言环境与不同固件 NVRAM 策略
+// 使用 /application bootfw 原生创建 UEFI 固件启动项，保证固件启动顺序生效
 // ============================================================================
 using System;
 using System.Collections.Generic;
@@ -24,12 +24,12 @@ namespace DbgTool.Core
                 return true;
             }
 
-            // 特例容错：某些删除指令在目标本就不存在时也视为 OK
+            // 特例容错：删除不存在的项视为成功
             string combined = res.CombinedOutput;
             if (args.Contains("/delete") &&
-                (combined.Contains("找不到") || combined.Contains("not found") || combined.Contains("元素")))
+                (combined.Contains("找不到") || combined.Contains("not found") || combined.Contains("元素") || combined.Contains("element")))
             {
-                ConsoleUI.Info(actionDesc + " ... 本就不存在，无需清理");
+                ConsoleUI.Info(actionDesc + " ... 项不存在，无需清理");
                 return true;
             }
 
@@ -47,7 +47,7 @@ namespace DbgTool.Core
 
         public static bool SetFirstBoot()
         {
-            ConsoleUI.Header("设置 Custom Bootloader 为第一启动项");
+            ConsoleUI.Header("设置 Custom Bootloader 为 UEFI 第一启动项");
 
             using (EspMount esp = EspManager.Mount())
             {
@@ -56,51 +56,51 @@ namespace DbgTool.Core
                 string efiFile = Path.Combine(esp.MountPoint, "EFI", "BOOT", "BOOTX64.efi");
                 if (!File.Exists(efiFile))
                 {
-                    ConsoleUI.Error("ESP 中未找到 " + efiFile + "，请先执行部署。");
+                    ConsoleUI.Error("ESP 中未找到 " + efiFile + "，请先执行部署操作。");
                     return false;
                 }
 
-                // 1) 清理现有重复项
+                // 1. 清理现有重复或失效的 Custom Bootloader 项
                 List<string> oldGuids = FindEntryGuids(BootEntryName);
                 if (oldGuids.Count > 0)
                 {
-                    ConsoleUI.Info("发现 " + oldGuids.Count + " 个旧 '" + BootEntryName + "' 项，正在清理...");
+                    ConsoleUI.Info("检测到 " + oldGuids.Count + " 个旧 '" + BootEntryName + "' 项，正在清理...");
                     foreach (string g in oldGuids)
                     {
                         RunBcd("/delete " + g + " /f", "清理旧项 " + g);
                     }
                 }
 
-                // 2) 创建全新启动项
+                // 2. 创建 UEFI 固件引导程序类型的全新启动项 (/application bootfw)
                 string guid = CreateEntry();
                 if (string.IsNullOrEmpty(guid))
                 {
-                    ConsoleUI.Error("创建 BCD 启动项失败。");
+                    ConsoleUI.Error("创建 BCD 固件启动项失败。");
                     return false;
                 }
-                ConsoleUI.Info("创建新启动项成功: " + guid);
+                ConsoleUI.Info("创建新固件启动项成功: " + guid);
 
-                // 3) 设置设备与路径
+                // 3. 设置设备与相对路径
                 string dev = "partition=" + esp.MountPoint.TrimEnd('\\');
-                bool ok = RunBcd("/set " + guid + " device " + dev, "设置引导设备 " + dev);
-                ok &= RunBcd("/set " + guid + " path " + EfiRelativePath, "设置引导程序路径 " + EfiRelativePath);
+                bool ok = RunBcd("/set " + guid + " device " + dev, "设置引导分区 " + dev);
+                ok &= RunBcd("/set " + guid + " path " + EfiRelativePath, "设置 EFI 路径 " + EfiRelativePath);
 
-                // 4) 置顶
+                // 4. 置顶到固件启动序列
                 bool orderOk = RunBcd("/set {fwbootmgr} displayorder " + guid + " /addfirst", "置顶到 {fwbootmgr} displayorder");
-                RunBcd("/set {fwbootmgr} timeout 3", "设置固件菜单等待超时 3s");
+                RunBcd("/set {fwbootmgr} timeout 3", "设置固件菜单超时 3s");
 
-                // 5) 复查
+                // 5. 校验置顶状态
                 string first = GetFwbootmgrFirst();
                 if (orderOk && !string.IsNullOrEmpty(first) && first.Equals(guid, StringComparison.OrdinalIgnoreCase))
                 {
-                    ConsoleUI.Info("验证通过: '" + BootEntryName + "' (" + guid + ") 已成功成为固件第一启动项！");
+                    ConsoleUI.Info("校验通过: '" + BootEntryName + "' (" + guid + ") 已成功成为固件第一启动项！");
                 }
                 else
                 {
-                    ConsoleUI.Warn("验证告警: {fwbootmgr} 首位为 " + (first ?? "未知") + "，可能被主板固件重排。");
-                    if (RunBcd("/set {fwbootmgr} bootsequence " + guid, "启用一次性 bootsequence 引导兜底"))
+                    ConsoleUI.Warn("提示: 固件当前首选启动项为 " + (first ?? "未知") + "，可能被主板 BIOS 锁序。");
+                    if (RunBcd("/set {fwbootmgr} bootsequence " + guid, "设置一次性 bootsequence 兜底"))
                     {
-                        ConsoleUI.Info("已设置一次性引导 bootsequence: 下次重启将自动引导 Custom Bootloader。");
+                        ConsoleUI.Info("已设置一次性引导 bootsequence: 下次重启将由 Custom Bootloader 引导。");
                     }
                 }
 
@@ -117,9 +117,9 @@ namespace DbgTool.Core
             ConsoleUI.Header("卸载 Custom Bootloader (还原系统引导)");
 
             Console.WriteLine("  操作内容:");
-            Console.WriteLine("    1. 清理 BCD 中所有 'Custom Bootloader' 启动项");
-            Console.WriteLine("    2. 清除一次性 bootsequence 并确保 Windows Boot Manager 恢复第一位");
-            Console.WriteLine("    3. 清理 ESP 分区 EFI\\BOOT 下的 bootloader 注入文件（若有备份则恢复）");
+            Console.WriteLine("    1. 清除 BCD 中所有 'Custom Bootloader' 启动项与 bootsequence");
+            Console.WriteLine("    2. 将 Windows Boot Manager 恢复为固件第一启动项");
+            Console.WriteLine("    3. 清理 ESP 分区中的引导文件（若有备份则还原原厂 BOOTX64.efi）");
             Console.WriteLine();
 
             if (!ConsoleUI.Confirm("确认执行卸载？", false))
@@ -128,7 +128,7 @@ namespace DbgTool.Core
                 return false;
             }
 
-            // 1. 删除启动项
+            // 1. 删除 BCD 启动项
             List<string> guids = FindEntryGuids(BootEntryName);
             if (guids.Count == 0)
             {
@@ -142,10 +142,9 @@ namespace DbgTool.Core
                 }
             }
 
-            // 清理 bootsequence
             ProcessRunner.Run("bcdedit", "/deletevalue {fwbootmgr} bootsequence");
 
-            // 2. 恢复 Windows Boot Manager 首位
+            // 2. 恢复 Windows Boot Manager 置顶
             string winGuid = FindWindowsBootMgrGuid();
             if (!string.IsNullOrEmpty(winGuid))
             {
@@ -153,7 +152,7 @@ namespace DbgTool.Core
             }
             else
             {
-                ConsoleUI.Warn("未检测到 Windows Boot Manager GUID，请进入 BIOS 确认启动项顺序。");
+                ConsoleUI.Warn("未检索到 Windows Boot Manager GUID，请进入 BIOS 确认启动项顺序。");
             }
 
             // 3. 清理 ESP 文件
@@ -198,12 +197,7 @@ namespace DbgTool.Core
                         }
                     }
 
-                    if (Directory.Exists(bootDir) && Directory.GetFiles(bootDir).Length == 0)
-                    {
-                        Directory.Delete(bootDir);
-                        ConsoleUI.Info("EFI\\BOOT 为空，已移除目录。");
-                    }
-                    ConsoleUI.Info("Custom Bootloader 卸载完成，下次启动将由原生固件与 Windows 引导。");
+                    ConsoleUI.Info("Custom Bootloader 卸载完成，下次启动将由原生固件与 Windows 正常引导。");
                     return true;
                 }
                 catch (Exception ex)
@@ -216,20 +210,19 @@ namespace DbgTool.Core
 
         private static string CreateEntry()
         {
-            ProcessResult res = ProcessRunner.Run("bcdedit", "/copy {bootmgr} /d \"" + BootEntryName + "\"");
-            if (!res.Success) return null;
+            // /application bootfw 创建 UEFI 固件引导项
+            ProcessResult res = ProcessRunner.Run("bcdedit", "/create /d \"" + BootEntryName + "\" /application bootfw");
+            if (!res.Success)
+            {
+                // 回退：直接使用 /create
+                res = ProcessRunner.Run("bcdedit", "/create /d \"" + BootEntryName + "\"");
+                if (!res.Success) return null;
+            }
 
             Match m = Regex.Match(res.CombinedOutput, @"(\{[0-9a-fA-F-]{36}\})");
             if (!m.Success) return null;
 
-            string guid = m.Groups[1].Value;
-            // 清理多余属性
-            string[] cleanup = { "default", "resumeobject", "displayorder", "toolsdisplayorder", "timeout" };
-            foreach (string prop in cleanup)
-            {
-                ProcessRunner.Run("bcdedit", "/deletevalue " + guid + " " + prop);
-            }
-            return guid;
+            return m.Groups[1].Value;
         }
 
         private static List<string> FindEntryGuids(string nameFilter)
