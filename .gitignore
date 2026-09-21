@@ -23,10 +23,10 @@ __pycache__/
 # Local reference firmware / dumps
 R9000P/
 
-# Auto-generated at build time (see tools/generate_version.py)
+# Auto-generated at build time
 version.txt
 src/Version.h
-src/acpi/VersionData.asl
+tools/DbgTool/VersionInfo.cs
 
 # Built binaries in root/tools (build/ already ignored)
 BOOTX64.efi

@@ -3,15 +3,9 @@ cmake_minimum_required(VERSION 3.24)
 # =============================================================================
 # Custom_Bootloader —— 全量 CMake 构建
 #
-# 产物（全部落在仓库 build\ 目录，与旧 build.bat 布局一致，verify_runtime /
-# DbgTool 部署 / 文档引用路径不变）：
-#   build\BOOTX64.efi   UEFI 引导器（MSVC freestanding，非 EDK2/GNU-EFI）
-#   build\DbgTool.exe   Windows 侧 WMI 工具（csc 编译）
-#   build\*.hex         iASL -tc 生成的 AML C 数组（AcpiPatch.c 引用）
-#   build\TableRegistry.h  自动生成的表替换注册表（匹配键来自固件 dump 头）
-#
-# 生成阶段全部实现为“每次构建必跑”的 custom target（与旧 build.bat 语义一
-# 致：Python 门禁很快，且保证 hex/注册表永不陈旧）。
+# 产物（全部落在仓库 build\ 目录）：
+#   build\BOOTX64.efi   UEFI 引导器（MSVC freestanding，纯内存特征修补）
+#   build\DbgTool.exe   Windows 侧部署与调试工具（csc 编译）
 # =============================================================================
 
 project(CustomBootloader C)
@@ -21,46 +15,20 @@ project(CustomBootloader C)
 # ---------------------------------------------------------------------------
 find_program(PYTHON_EXE NAMES python python3 REQUIRED)
 
-set(IASL "${CMAKE_SOURCE_DIR}/tools/isal/iasl.exe")
-if(NOT EXISTS "${IASL}")
-    message(FATAL_ERROR "iasl.exe 未找到：${IASL}")
-endif()
-
-# 生成物与最终产物目录（gitignored；verify_runtime.py 等按此路径消费）
+# 生成物与最终产物目录（gitignored）
 set(GEN_DIR "${CMAKE_SOURCE_DIR}/build")
 
 # ---------------------------------------------------------------------------
-# 阶段 1：版本头（build\Version.h、build\VersionData.asl、version.txt）
+# 阶段 1：版本头（build\Version.h、version.txt）
 # ---------------------------------------------------------------------------
 add_custom_target(version_gen
     COMMAND "${PYTHON_EXE}" tools/generate_version.py --out-dir "${GEN_DIR}"
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-    COMMENT "[version] 生成 Version.h / VersionData.asl / version.txt"
+    COMMENT "[version] 生成 Version.h / version.txt"
     VERBATIM)
 
 # ---------------------------------------------------------------------------
-# 阶段 2：补丁门禁 —— 注释声明审计 + 与固件 dump 的交叉检查
-# ---------------------------------------------------------------------------
-add_custom_target(patch_gates
-    COMMAND "${PYTHON_EXE}" tools/generate_patched_tables.py --audit
-    COMMAND "${PYTHON_EXE}" tools/verify_crosscheck.py
-    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-    COMMENT "[gates] 补丁声明审计 + dump 交叉检查"
-    VERBATIM)
-
-# ---------------------------------------------------------------------------
-# 阶段 3：补丁表构建 —— 生成 patched dsl、AML/hex、roundtrip 门、指纹门，
-# 并生成 C 侧注册表 build\TableRegistry.h（表清单由 patches_*.py 自动发现）
-# ---------------------------------------------------------------------------
-add_custom_target(acpi_tables
-    COMMAND "${PYTHON_EXE}" tools/build_patched_tables.py --out-dir "${GEN_DIR}"
-    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-    COMMENT "[acpi] 生成补丁 AML/hex + TableRegistry.h（roundtrip+指纹门）"
-    VERBATIM)
-add_dependencies(acpi_tables patch_gates)
-
-# ---------------------------------------------------------------------------
-# 阶段 3.5：THMP 补丁配置头（build\ThmpConfig.h，源于 tools\thmp_config.yaml）
+# 阶段 2：THMP 补丁配置头（build\ThmpConfig.h，源于 tools\thmp_config.yaml）
 # ---------------------------------------------------------------------------
 add_custom_target(thmp_config_gen
     COMMAND "${PYTHON_EXE}" tools/generate_thmp_config.py --out-dir "${GEN_DIR}"
@@ -99,7 +67,7 @@ add_executable(BOOTX64
 
 target_include_directories(BOOTX64 PRIVATE
     "${CMAKE_SOURCE_DIR}/src"
-    "${GEN_DIR}")            # TableRegistry.h / *.hex / Version.h
+    "${GEN_DIR}")
 
 target_compile_options(BOOTX64 PRIVATE /GS- /W4 /O2 /utf-8)
 
