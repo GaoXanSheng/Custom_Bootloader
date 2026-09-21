@@ -24,11 +24,34 @@ DefinitionBlock ("", "SSDT", 2, "CUSTOM", "DBUNLOCK", 0x00002000)
     External (\_SB.PCI0.LPC0.H_EC.BBHL, FieldUnitObj)
     External (\_SB.PCI0.LPC0.H_EC.ECRD, MethodObj)
     External (\_SB.PCI0.LPC0.H_EC.ECWT, MethodObj)
+    // Method 8/9 whitelist additions (fields the firmware itself writes via
+    // MIFS WMAA 0xFB00, ssdt3)
+    External (\_SB.PCI0.LPC0.H_EC.FNHK, FieldUnitObj)
+    External (\_SB.PCI0.LPC0.H_EC.TOCP, FieldUnitObj)
+    External (\_SB.PCI0.LPC0.H_EC.FASP, FieldUnitObj)
+    External (\_SB.PCI0.LPC0.H_EC.KBNL, FieldUnitObj)
+    External (\_SB.PCI0.LPC0.H_EC.FWDE, FieldUnitObj)
+    External (\_SB.PCI0.LPC0.H_EC.LEDM, FieldUnitObj)
     External (\_SB.NPCF, DeviceObj)
     External (\_SB.NPCF.ACBT, IntObj)
     External (\_SB.NPCF.DCBT, IntObj)
     External (\_SB.NPCF.AMAT, IntObj)
     External (\_SB.NPCF.AMIT, IntObj)
+    // NPCF driver-call trace variables (created by ssdt4-npcf-trace patches)
+    External (\_SB.NPCF.CUSL, IntObj)
+    External (\_SB.NPCF.CUCT, IntObj)
+    External (\_SB.NPCF.T6C, IntObj)
+    External (\_SB.NPCF.T6V, IntObj)
+    // NPCF Dynamic-Boost 平台开关标志（ssdt4-dbac-dbof-switch 让 fun#2 的
+    // DBAC/PC02 读它）。0 = DB 开（原厂：GPU 借电冲 140W，CPU 可能被压 40W）；
+    // 1 = DB 关（GPU 锁基础 TGP ~115W，CPU 保持满血）
+    External (\_SB.NPCF.DBOF, IntObj)
+    // NPCF DB 借电上限（ssdt4-maga-boost-cap 让 fun#2 的 MAGA 读它）。
+    // 0.5W 单位，默认 0xC8=100W（原厂上报值）；由 WMTF Method 20 按瓦设置
+    External (\_SB.NPCF.MGAF, IntObj)
+    // NPCF GPU 功耗预算（ssdt4-tgpa-budget-knob 让 fun#2 性能档的 TGPA 读
+    // 它）。0.5W 单位，默认 0x0118=140W（原厂）；由 WMTF Method 22 按瓦设置
+    External (\_SB.NPCF.TGPF, IntObj)
     External (\_SB.ALIB, MethodObj)
 
     Scope (\_SB.PCI0.LPC0)
@@ -40,9 +63,14 @@ DefinitionBlock ("", "SSDT", 2, "CUSTOM", "DBUNLOCK", 0x00002000)
 
             Include ("VersionData.asl")
 
-            // WMI Override Persistence Lock Mask & SMI status
-            Name (WMOV, Zero)   // Bitmask: Bit0=MAGA/TGPA Lock, Bit1=ATPP/ATP2 Lock, Bit2=CSPL/FPPT Lock
-            Name (WSMI, Zero)   // Last SMI status
+            // WMI Override Persistence Lock Mask & SMI status - REMOVED 2026-09-12:
+            // WMOV/WSMI (old WMTF Methods 10-13) had no consumer anywhere, lived
+            // only in SSDT namespace variables and reset on every boot. Dead
+            // method IDs 10-13/15 now fall through to the default 0xFFFFFFFF.
+            // The same applies to ACBT/DCBT/AMAT/AMIT (Method 6/7): kept because
+            // they are readable state, but the ASL channel removed every
+            // consumer (TGPD=TGPA, TPPD=TPPA), so writes to those names no
+            // longer influence power behavior.
 
         OperationRegion (ECMR, EmbeddedControl, 0, 0x100)
         Field (ECMR, ByteAcc, NoLock, Preserve)
@@ -340,23 +368,27 @@ DefinitionBlock ("", "SSDT", 2, "CUSTOM", "DBUNLOCK", 0x00002000)
                     \_SB.PCI0.LPC0.H_EC.ECWT (One, RefOf (\_SB.PCI0.LPC0.H_EC.GPMD))
                 }
 
-                // DCBT (电池取电门限) 提升至 80W (0x50)，彻底解除 40W 锁
+                // DCBT (电池取电门限) 仍按 80W (0x50) 推送。注：补丁版 SSDT4 的
+                // TGPD 已改为读 TGPA (ssdt4-tgpd-ac)，DCBT 在补丁链路中无消费者，
+                // 此写仅为保持数值一致（见 patches_ssdt4.py 声明审计）
                 If (CondRefOf (\_SB.NPCF.DCBT))
                 {
                     Store (0x50, \_SB.NPCF.DCBT)
                 }
 
-                // CPU PL1/PL2 初始化配置 (CSPL=85W, FPPT=110W) 并推送 SMU
-                // 85W CPU + 140W GPU + 30W 外围 = 255W，完美匹配 280W 适配器，防止整机峰值拉爆导致过流借电
+                // CPU PL1/PL2 初始化配置 (CSPL=110W, FPPT=120W) 并推送 SMU
+                // 整机功耗墙 280W：110W CPU + 140W GPU + 30W 外设 = 280W，
+                // 打满适配器预算。CSPL 是整机墙本体：此后每次 FNQS/COMM 都
+                // 经 MSPL 把 max(EC CSPL, 下限 80W) 重推给 SMU
                 If (CondRefOf (\_SB.PCI0.LPC0.H_EC.ECWT))
                 {
-                    \_SB.PCI0.LPC0.H_EC.ECWT (0x55, RefOf (\_SB.PCI0.LPC0.H_EC.CSPL))
+                    \_SB.PCI0.LPC0.H_EC.ECWT (0x6E, RefOf (\_SB.PCI0.LPC0.H_EC.CSPL))
                     If (CondRefOf (\_SB.PCI0.LPC0.H_EC.MSPL))
                     {
                         \_SB.PCI0.LPC0.H_EC.MSPL ()
                     }
 
-                    \_SB.PCI0.LPC0.H_EC.ECWT (0x6E, RefOf (\_SB.PCI0.LPC0.H_EC.FPPT))
+                    \_SB.PCI0.LPC0.H_EC.ECWT (0x78, RefOf (\_SB.PCI0.LPC0.H_EC.FPPT))
                     If (CondRefOf (\_SB.PCI0.LPC0.H_EC.MFPT))
                     {
                         \_SB.PCI0.LPC0.H_EC.MFPT ()
@@ -365,7 +397,9 @@ DefinitionBlock ("", "SSDT", 2, "CUSTOM", "DBUNLOCK", 0x00002000)
             }
 
             // -------------------------------------------------------------
-            // Master WMI Method Dispatcher (WMTF) - 16 Methods
+            // Master WMI Method Dispatcher (WMTF)
+            // Live IDs: 1-9, 14, 16, 17, 19. Dead/removed: 10-13, 15 (fall through
+            // to the default 0xFFFFFFFF below).
             // -------------------------------------------------------------
             Method (WMTF, 3, Serialized)
             {
@@ -404,24 +438,47 @@ DefinitionBlock ("", "SSDT", 2, "CUSTOM", "DBUNLOCK", 0x00002000)
                 }
 
                 // =========================================================
-                // Method 1: SetDbfs
+                // Method 1: SetDbfs —— Dynamic Boost 真开关（2026-09-21 重做）
                 // =========================================================
+                // 旧实现只写 \DBFS：补丁版 FNQS/MSPL/MFPT 已不读它，纯写无效。
+                // 新实现拨动 NPCF 作用域的 DBOF 标志（补丁版 SSDT4 的 fun#2
+                // 组装 PC02 时读它），再 Notify(NPCF, 0xC0) 逼驱动立即重读
+                // fun#2 预算：
+                //   INP0 = 1 → DBOF=0 → PC02=0 → DB 开：GPU 借电冲 140W
+                //              （原厂路径，CPU 可能被 SMU 压到 40W）
+                //   INP0 = 0 → DBOF=1 → PC02=1 → DB 关：GPU 锁基础 TGP
+                //              ~115W，CPU 保持满血（实测 2026-09-21：
+                //              PC02=1 时 GPU 顶在 115W，PC02=0 时 139.8W）
+                // 返回：V1D1 = 0 成功；0xFFFFFFFF = NPCF/DBOF 不在（表未加载）
                 If (LEqual (Arg1, 1))
                 {
-                    // Kept for parity with the firmware's own DBFS flow
-                    // (_Q81/_Q82 style: DBFS = X; FNQS (ITSM); COMM ()).
-                    // NOTE: since the power-wall unlock, the patched FNQS no
-                    // longer reads DBFS (AC always dispatches the full-power
-                    // profile) and the MSPL/MFPT clamps are disabled, so this
-                    // toggle only affects firmware-side consumers of the DBFS
-                    // EC field - it can no longer lower the CPU profile.
-                    If (CondRefOf (\DBFS)) { Store (INP0, \DBFS) }
-                    If (CondRefOf (\_SB.PCI0.LPC0.H_EC.FNQS))
+                    Store (0xFFFFFFFF, V1D1)
+                    If (CondRefOf (\_SB.NPCF.DBOF))
                     {
-                        \_SB.PCI0.LPC0.H_EC.FNQS (\_SB.PCI0.LPC0.H_EC.ITSM)
+                        If (LEqual (INP0, One))
+                        {
+                            Store (Zero, \_SB.NPCF.DBOF)
+                        }
+                        Else
+                        {
+                            Store (One, \_SB.NPCF.DBOF)
+                        }
+
+                        // 保持 \DBFS 状态变量与选择一致（EC 侧读它做记录，
+                        // 补丁版 AML 已无消费者）
+                        If (CondRefOf (\DBFS)) { Store (INP0, \DBFS) }
+
+                        // 逼 NVIDIA 驱动立即重读 fun#2（平台预算快照）
+                        Notify (\_SB.NPCF, 0xC0)
+
+                        // 照原厂 DB 事件风格推送一次档位与下限
+                        If (CondRefOf (\_SB.PCI0.LPC0.H_EC.FNQS))
+                        {
+                            \_SB.PCI0.LPC0.H_EC.FNQS (\_SB.PCI0.LPC0.H_EC.ITSM)
+                        }
+                        If (CondRefOf (\_SB.PCI0.LPC0.H_EC.COMM)) { \_SB.PCI0.LPC0.H_EC.COMM () }
+                        Store (Zero, V1D1)
                     }
-                    If (CondRefOf (\_SB.PCI0.LPC0.H_EC.COMM)) { \_SB.PCI0.LPC0.H_EC.COMM () }
-                    Store (Zero, V1D1)
                     Return (R1DW)
                 }
 
@@ -496,12 +553,35 @@ DefinitionBlock ("", "SSDT", 2, "CUSTOM", "DBUNLOCK", 0x00002000)
                 // Method 8: SetEcRegister (EC Write, known fields only)
                 // ECRD/ECWT take RefOf(field), not numeric offsets —
                 // dispatch INP0 (offset) to the matching EC field.
+                // Whitelist = fields the firmware itself writes through its
+                // own MIFS WMAA 0xFB00 path (ssdt3) + the power limits.
+                // Bit fields (FNHK@0x20.3, TOCP@0x25.0, FWDE@0xE2.2) are
+                // written via RefOf so only that bit changes. FAAP shares
+                // byte 0xE2 with FWDE and is intentionally NOT exposed
+                // (reachable via MIFS 0x1400); writing the byte would be
+                // ambiguous.
                 // =========================================================
                 If (LEqual (Arg1, 8))
                 {
                     If (CondRefOf (\_SB.PCI0.LPC0.H_EC.ECWT))
                     {
-                        If (LEqual (INP0, 0xD0))
+                        If (LEqual (INP0, 0x20))
+                        {
+                            \_SB.PCI0.LPC0.H_EC.ECWT (INP1, RefOf (\_SB.PCI0.LPC0.H_EC.FNHK))
+                        }
+                        ElseIf (LEqual (INP0, 0x25))
+                        {
+                            \_SB.PCI0.LPC0.H_EC.ECWT (INP1, RefOf (\_SB.PCI0.LPC0.H_EC.TOCP))
+                        }
+                        ElseIf (LEqual (INP0, 0x5F))
+                        {
+                            \_SB.PCI0.LPC0.H_EC.ECWT (INP1, RefOf (\_SB.PCI0.LPC0.H_EC.FASP))
+                        }
+                        ElseIf (LEqual (INP0, 0x9A))
+                        {
+                            \_SB.PCI0.LPC0.H_EC.ECWT (INP1, RefOf (\_SB.PCI0.LPC0.H_EC.KBNL))
+                        }
+                        ElseIf (LEqual (INP0, 0xD0))
                         {
                             \_SB.PCI0.LPC0.H_EC.ECWT (INP1, RefOf (\_SB.PCI0.LPC0.H_EC.TFLG))
                         }
@@ -513,6 +593,10 @@ DefinitionBlock ("", "SSDT", 2, "CUSTOM", "DBUNLOCK", 0x00002000)
                         {
                             \_SB.PCI0.LPC0.H_EC.ECWT (INP1, RefOf (\_SB.PCI0.LPC0.H_EC.GPMD))
                         }
+                        ElseIf (LEqual (INP0, 0xE2))
+                        {
+                            \_SB.PCI0.LPC0.H_EC.ECWT (INP1, RefOf (\_SB.PCI0.LPC0.H_EC.FWDE))
+                        }
                         ElseIf (LEqual (INP0, 0xE3))
                         {
                             \_SB.PCI0.LPC0.H_EC.ECWT (INP1, RefOf (\_SB.PCI0.LPC0.H_EC.BPWM))
@@ -520,6 +604,10 @@ DefinitionBlock ("", "SSDT", 2, "CUSTOM", "DBUNLOCK", 0x00002000)
                         ElseIf (LEqual (INP0, 0xE4))
                         {
                             \_SB.PCI0.LPC0.H_EC.ECWT (INP1, RefOf (\_SB.PCI0.LPC0.H_EC.ITSM))
+                        }
+                        ElseIf (LEqual (INP0, 0xE8))
+                        {
+                            \_SB.PCI0.LPC0.H_EC.ECWT (INP1, RefOf (\_SB.PCI0.LPC0.H_EC.LEDM))
                         }
                         ElseIf (LEqual (INP0, 0xF2))
                         {
@@ -552,13 +640,30 @@ DefinitionBlock ("", "SSDT", 2, "CUSTOM", "DBUNLOCK", 0x00002000)
 
                 // =========================================================
                 // Method 9: GetEcRegister (EC Read, known fields only)
+                // Mirrors the Method 8 whitelist.
                 // =========================================================
                 If (LEqual (Arg1, 9))
                 {
                     Store (0xFF, V1D1)
                     If (CondRefOf (\_SB.PCI0.LPC0.H_EC.ECRD))
                     {
-                        If (LEqual (INP0, 0xD0))
+                        If (LEqual (INP0, 0x20))
+                        {
+                            Store (\_SB.PCI0.LPC0.H_EC.ECRD (RefOf (\_SB.PCI0.LPC0.H_EC.FNHK)), V1D1)
+                        }
+                        ElseIf (LEqual (INP0, 0x25))
+                        {
+                            Store (\_SB.PCI0.LPC0.H_EC.ECRD (RefOf (\_SB.PCI0.LPC0.H_EC.TOCP)), V1D1)
+                        }
+                        ElseIf (LEqual (INP0, 0x5F))
+                        {
+                            Store (\_SB.PCI0.LPC0.H_EC.ECRD (RefOf (\_SB.PCI0.LPC0.H_EC.FASP)), V1D1)
+                        }
+                        ElseIf (LEqual (INP0, 0x9A))
+                        {
+                            Store (\_SB.PCI0.LPC0.H_EC.ECRD (RefOf (\_SB.PCI0.LPC0.H_EC.KBNL)), V1D1)
+                        }
+                        ElseIf (LEqual (INP0, 0xD0))
                         {
                             Store (\_SB.PCI0.LPC0.H_EC.ECRD (RefOf (\_SB.PCI0.LPC0.H_EC.TFLG)), V1D1)
                         }
@@ -570,6 +675,10 @@ DefinitionBlock ("", "SSDT", 2, "CUSTOM", "DBUNLOCK", 0x00002000)
                         {
                             Store (\_SB.PCI0.LPC0.H_EC.ECRD (RefOf (\_SB.PCI0.LPC0.H_EC.GPMD)), V1D1)
                         }
+                        ElseIf (LEqual (INP0, 0xE2))
+                        {
+                            Store (\_SB.PCI0.LPC0.H_EC.ECRD (RefOf (\_SB.PCI0.LPC0.H_EC.FWDE)), V1D1)
+                        }
                         ElseIf (LEqual (INP0, 0xE3))
                         {
                             Store (\_SB.PCI0.LPC0.H_EC.ECRD (RefOf (\_SB.PCI0.LPC0.H_EC.BPWM)), V1D1)
@@ -577,6 +686,10 @@ DefinitionBlock ("", "SSDT", 2, "CUSTOM", "DBUNLOCK", 0x00002000)
                         ElseIf (LEqual (INP0, 0xE4))
                         {
                             Store (\_SB.PCI0.LPC0.H_EC.ECRD (RefOf (\_SB.PCI0.LPC0.H_EC.ITSM)), V1D1)
+                        }
+                        ElseIf (LEqual (INP0, 0xE8))
+                        {
+                            Store (\_SB.PCI0.LPC0.H_EC.ECRD (RefOf (\_SB.PCI0.LPC0.H_EC.LEDM)), V1D1)
                         }
                         ElseIf (LEqual (INP0, 0xF2))
                         {
@@ -607,42 +720,12 @@ DefinitionBlock ("", "SSDT", 2, "CUSTOM", "DBUNLOCK", 0x00002000)
                 }
 
                 // =========================================================
-                // Method 10: SetOverrideLock
+                // Method 10-13 (SetOverrideLock/GetOverrideLock/SetSwSmi/
+                // GetSwSmiStatus) and 15 (GetAmdAlibDirect) were REMOVED:
+                // dead implementations (no consumer, no persistence, constant
+                // return). IDs stay reserved - they fall through to the
+                // default 0xFFFFFFFF below.
                 // =========================================================
-                If (LEqual (Arg1, 10))
-                {
-                    Store (INP0, WMOV)
-                    Store (Zero, V1D1)
-                    Return (R1DW)
-                }
-
-                // =========================================================
-                // Method 11: GetOverrideLock
-                // =========================================================
-                If (LEqual (Arg1, 11))
-                {
-                    Store (WMOV, V1D1)
-                    Return (R1DW)
-                }
-
-                // =========================================================
-                // Method 12: SetSwSmi
-                // =========================================================
-                If (LEqual (Arg1, 12))
-                {
-                    Store (INP0, WSMI)
-                    Store (Zero, V1D1)
-                    Return (R1DW)
-                }
-
-                // =========================================================
-                // Method 13: GetSwSmiStatus
-                // =========================================================
-                If (LEqual (Arg1, 13))
-                {
-                    Store (WSMI, V1D1)
-                    Return (R1DW)
-                }
 
                 // =========================================================
                 // Method 14: SetAmdAlibDirect
@@ -663,25 +746,23 @@ DefinitionBlock ("", "SSDT", 2, "CUSTOM", "DBUNLOCK", 0x00002000)
                 }
 
                 // =========================================================
-                // Method 15: GetAmdAlibDirect
+                // Method 15: (removed - was a constant-zero placeholder)
                 // =========================================================
-                If (LEqual (Arg1, 15))
-                {
-                    Store (Zero, V1D1)
-                    Return (R1DW)
-                }
 
                 // =========================================================
                 // Method 16: GetDynamicBoost
                 // =========================================================
-                // 结合本补丁（DBFS 保持原厂值不做强制 + MSPL/MFPT 钳制块 If(Zero)
-                // 禁用 + FNQS 整方法替换为 AC 满血档）返回数据供工具计算：
+                // 结合本补丁（_Q81/_Q82 保持原厂、DBFS 跟随 EC 事件 +
+                // MSPL/MFPT 改为无条件下限 + FNQS 整方法重写：ITSM 非零→
+                // THMD(Zero) 满血档 / 零→THMD(0x13) 办公档）返回数据供工具计算：
                 //   V4D1 = DBFS 当前值（0=禁 / 1=启 / 0xFFFFFFFF=不存在）
                 //   V4D2 = CSPL（EC 0xF6，CPU PL1，单位 W）
                 //   V4D3 = FPPT（EC 0xF7，CPU PL2，单位 W）
-                //   V4D4 = 原厂固件 DBFS=1 时的 PL2 钳制上限（CPUT 0x09→75W，其余→65W）
+                //   V4D4 = 当前 DB 借电上限（瓦，= NPCF.MGAF/2，由 Method 20
+                //          设置；表未加载时 0xFF）
                 // 最大借用功耗（原厂机制）= V4D3 − V4D4；
-                // 本补丁禁用钳制后 CPU 不再让电，借用恒为 0（V4D4 仅作参考）。
+                // 补丁版 MSPL/MFPT 下限兜底后，GPU 增压期间 CPU 不会再被钳到
+                // 下限以下（V4D4 仅作原厂对照参考）。
                 If (LEqual (Arg1, 16))
                 {
                     If (CondRefOf (\DBFS)) { Store (\DBFS, V4D1) }
@@ -690,20 +771,20 @@ DefinitionBlock ("", "SSDT", 2, "CUSTOM", "DBUNLOCK", 0x00002000)
                     {
                         Store (\_SB.PCI0.LPC0.H_EC.ECRD (RefOf (\_SB.PCI0.LPC0.H_EC.CSPL)), V4D2) // CSPL/PL1
                         Store (\_SB.PCI0.LPC0.H_EC.ECRD (RefOf (\_SB.PCI0.LPC0.H_EC.FPPT)), V4D3) // FPPT/PL2
-                        If (LEqual (\_SB.PCI0.LPC0.H_EC.ECRD (RefOf (\_SB.PCI0.LPC0.H_EC.CPUT)), 0x09))
+                        If (CondRefOf (\_SB.NPCF.MGAF))
                         {
-                            Store (0x4B, V4D4) // CPUT 0x09 → 75W
+                            ShiftRight (\_SB.NPCF.MGAF, One, V4D4)
                         }
                         Else
                         {
-                            Store (0x41, V4D4) // CPUT 0x07/0x05 → 65W
+                            Store (0xFF, V4D4)
                         }
                     }
                     Else
                     {
                         Store (0xFF, V4D2)
                         Store (0xFF, V4D3)
-                        Store (0x41, V4D4)
+                        Store (0xFF, V4D4)
                     }
                     Return (R4DW)
                 }
@@ -971,6 +1052,121 @@ DefinitionBlock ("", "SSDT", 2, "CUSTOM", "DBUNLOCK", 0x00002000)
                         ElseIf (LEqual (INP0, 0xFE)) { Store (ECFE, V1D1) }
                         ElseIf (LEqual (INP0, 0xFF)) { Store (ECFF, V1D1) }
                     Return (R1DW)
+                }
+
+                // =========================================================
+                // Method 19: ApplyPowerLimits
+                //   INP0 = new CSPL (CPU PL1, W) or Zero = keep current
+                //   INP1 = new FPPT (CPU PL2, W) or Zero = keep current
+                // Writes the limits then calls COMM() (= MSPL+MFPT+CTCL),
+                // which pushes them to the SMU via ALIB(0x0C). This is the
+                // sanctioned runtime entry point - the _INI values can be
+                // rewritten later by EC events (_Q10) and OEM software
+                // (MIFS WMAA 0x1700), so re-apply here instead of hoping
+                // the boot-time write sticks.
+                // =========================================================
+                If (LEqual (Arg1, 0x13))
+                {
+                    If (CondRefOf (\_SB.PCI0.LPC0.H_EC.ECWT))
+                    {
+                        If (LGreater (INP0, Zero))
+                        {
+                            \_SB.PCI0.LPC0.H_EC.ECWT (INP0, RefOf (\_SB.PCI0.LPC0.H_EC.CSPL))
+                        }
+                        If (LGreater (INP1, Zero))
+                        {
+                            \_SB.PCI0.LPC0.H_EC.ECWT (INP1, RefOf (\_SB.PCI0.LPC0.H_EC.FPPT))
+                        }
+                    }
+                    If (CondRefOf (\_SB.PCI0.LPC0.H_EC.COMM))
+                    {
+                        \_SB.PCI0.LPC0.H_EC.COMM ()
+                    }
+                    Store (Zero, V1D1)
+                    Return (R1DW)
+                }
+
+                // =========================================================
+                // Method 20: SetDbBoostCap —— DB 借电上限旋钮（瓦）
+                // =========================================================
+                // INP0 = 允许 Dynamic Boost 从 CPU 借走的最大功率（0..100W）。
+                // 写入 NPCF.MGAF（0.5W 单位）后 Notify(NPCF, 0xC0) 逼驱动
+                // 立即重读 fun#2。驱动的 +25W SKU 政策与该上限取小：
+                //   100 = 原厂行为（GPU 可借满 25W 到 140W）
+                //   10  = 最多借 10W（GPU 顶 ~125W，CPU 少让电）——若驱动
+                //         尊重 MAGA 即生效
+                //   0   = 等效关闭 DB（GPU 锁 115W）
+                // 返回：V1D1 = 0 成功；0xFFFFFFFF = 表未加载；2 = 参数越界
+                If (LEqual (Arg1, 20))
+                {
+                    Store (0xFFFFFFFF, V1D1)
+                    If (CondRefOf (\_SB.NPCF.MGAF))
+                    {
+                        If (LGreater (INP0, 0x64))
+                        {
+                            Store (0x02, V1D1)
+                        }
+                        Else
+                        {
+                            // MGAF 以 0.5W 为单位：瓦 × 2
+                            Store (ShiftLeft (INP0, One), Local0)
+                            Store (Local0, \_SB.NPCF.MGAF)
+                            Notify (\_SB.NPCF, 0xC0)
+                            Store (Zero, V1D1)
+                        }
+                    }
+                    Return (R1DW)
+                }
+
+                // =========================================================
+                // Method 22: SetGpuBudget —— GPU 功耗预算旋钮（瓦）
+                // =========================================================
+                // INP0 = GPU 功耗预算（35..140W，0.5W 粒度）。
+                // 写入 NPCF.TGPF（0.5W 单位）后 Notify(NPCF, 0xC0) 逼驱动
+                // 立即重读 fun#2 —— NVIDIA 驱动按 TGPA 作为其功耗目标上限。
+                // 仅作用于性能档（ITSM==1 时 fun#2 读 TGPF）；办公档
+                // （ITSM==0）保持原厂 60W 预算。
+                // 返回：V1D1 = 0 成功；0xFFFFFFFF = 表未加载；2 = 参数越界
+                If (LEqual (Arg1, 22))
+                {
+                    Store (0xFFFFFFFF, V1D1)
+                    If (CondRefOf (\_SB.NPCF.TGPF))
+                    {
+                        If (LGreater (INP0, 0x8C))
+                        {
+                            Store (0x02, V1D1)
+                        }
+                        Else
+                        {
+                            // TGPF 以 0.5W 为单位：瓦 × 2
+                            Store (ShiftLeft (INP0, One), Local0)
+                            Store (Local0, \_SB.NPCF.TGPF)
+                            Notify (\_SB.NPCF, 0xC0)
+                            Store (Zero, V1D1)
+                        }
+                    }
+                    Return (R1DW)
+                }
+
+                // =========================================================
+                // Method 21 (0x15): GetNpcfTrace
+                //   Returns R4DW = {CUSL, CUCT, T6C, T6V}
+                //   CUSL/CUCT: last values the NVIDIA driver sent via NPCF
+                //   fun#5 (INC5=3/4). T6C/T6V: invocation count and last
+                //   NCHP (CPU watts) the driver sent via NPCF fun#6 INC6=1
+                //   (the CPUC IO-port set path, IOBS-gated dead in this
+                //   AML) - instrumented by ssdt4-npcf-trace patches.
+                //   Nonzero after a Dynamic Boost clamp = the driver drives
+                //   CPU power through that AML entry; all-zero = the clamp
+                //   bypasses ACPI entirely (SMU-internal).
+                // =========================================================
+                If (LEqual (Arg1, 0x15))
+                {
+                    If (CondRefOf (\_SB.NPCF.CUSL)) { Store (\_SB.NPCF.CUSL, V4D1) }
+                    If (CondRefOf (\_SB.NPCF.CUCT)) { Store (\_SB.NPCF.CUCT, V4D2) }
+                    If (CondRefOf (\_SB.NPCF.T6C)) { Store (\_SB.NPCF.T6C, V4D3) }
+                    If (CondRefOf (\_SB.NPCF.T6V)) { Store (\_SB.NPCF.T6V, V4D4) }
+                    Return (R4DW)
                 }
 
                 // Default Fallback for Unknown Method IDs

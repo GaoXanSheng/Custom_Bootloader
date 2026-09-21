@@ -53,35 +53,33 @@ EFI_STATUS EFIAPI efi_main(
     SystemTable->ConOut->OutputString(SystemTable->ConOut, L"[+] Successfully located ACPI RSDP Table.\r\n");
     LogToFile(SystemTable, ImageHandle, L"[+] Successfully located ACPI RSDP Table.");
 
-    Status = InjectSsdt(SystemTable, ImageHandle, Rsdp);
-    if (EFI_ERROR(Status)) {
-        SystemTable->ConOut->OutputString(SystemTable->ConOut, L"[-] Error: SSDT Injection failed.\r\n");
+    // ACPI 1.0 的 RSDP 没有 XsdtAddress 字段（XSDT 自 ACPI 2.0 引入）。
+    // 后续 ReplaceAcpiTables 依赖 XSDT，未经版本检查直接
+    // 解引用会读到垃圾指针——此处显式拦截。
+    if (Rsdp->Revision < 2) {
+        LogToFile(SystemTable, ImageHandle,
+                  L"[-] ALARM: RSDP Revision < 2 (no XSDT) - table patching unsupported.");
+        SystemTable->ConOut->OutputString(SystemTable->ConOut,
+            L"  [!] ALARM: RSDP Revision < 2 - no XSDT!\r\n");
         BS->Stall(5000000);
-        return Status;
-    }
-    SystemTable->ConOut->OutputString(SystemTable->ConOut, L"[+] Custom SSDT injected successfully.\r\n");
-
-    Status = PatchTablesInPlace(SystemTable, ImageHandle, Rsdp);
-    if (!EFI_ERROR(Status)) {
-        ConsolePrint(SystemTable, L"[+] In-place patch pass executed.\r\n", FALSE);
+        return EFI_UNSUPPORTED;
     }
 
     Status = ReplaceAcpiTables(SystemTable, ImageHandle, Rsdp);
     if (EFI_ERROR(Status)) {
         ConsolePrint(SystemTable,
-                     L"  [-] ALARM: ACPI table replacement matched NO target table. "
-                     L"Check unlock.log / BIOS version.\r\n",
+                     L"  [-] ALARM: ACPI in-place memory patching failed! Check unlock.log.\r\n",
                      TRUE);
         LogToFile(SystemTable, ImageHandle,
-                  L"[-] ALARM: ACPI table replacement matched no target table.");
+                  L"[-] ALARM: ACPI in-place memory patching failed.");
     } else {
         ConsolePrint(SystemTable,
-                     L"[+] ACPI table replacement applied (DSDT/SSDT4).\r\n", FALSE);
+                     L"[+] ACPI in-place memory patch applied successfully (see unlock.log).\r\n", FALSE);
     }
 
 #if BOOT_ICON_REPLACE
-    // Replace UEFI boot logo via ACPI BGRT hijack and GOP Blt before chainloading.
-    // Cosmetic only: failure must be visible but must not block the boot.
+    // 链式引导前用 ACPI BGRT 劫持 + GOP Blt 替换 UEFI 开机 logo。
+    // 纯装饰性：失败要可见，但绝不能阻塞引导。
     Status = PatchBgrtAndDrawLogo(SystemTable, ImageHandle, Rsdp);
     if (EFI_ERROR(Status)) {
         LogToFile(SystemTable, ImageHandle,

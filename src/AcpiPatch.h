@@ -3,21 +3,8 @@
 
 #include "UefiHelpers.h"
 
-// Inject custom WMI SSDT (SsdtUnlockDB) by extending XSDT/RSDT.
-EFI_STATUS InjectSsdt(
-    EFI_SYSTEM_TABLE *SystemTable,
-    EFI_HANDLE ImageHandle,
-    EFI_ACPI_2_0_ROOT_SYSTEM_DESCRIPTION_POINTER *Rsdp
-);
-
-// Optional in-place fallback byte patch pass on original table pages.
-EFI_STATUS PatchTablesInPlace(
-    EFI_SYSTEM_TABLE *SystemTable,
-    EFI_HANDLE ImageHandle,
-    EFI_ACPI_2_0_ROOT_SYSTEM_DESCRIPTION_POINTER *Rsdp
-);
-
-// Replace target ACPI tables (DSDT + SSDT4) via XSDT / FACP pointer redirection.
+// 运行时内存特征搜索与就地修改（按 tools/thmp_config.yaml 配置规则）
+// 直接在固件真实 DSDT 镜像中修改变量，完全不预埋静态 ACPI 表，适应不同 BIOS 版本。
 EFI_STATUS ReplaceAcpiTables(
     EFI_SYSTEM_TABLE *SystemTable,
     EFI_HANDLE ImageHandle,

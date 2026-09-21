@@ -1150,9 +1150,9 @@ DefinitionBlock ("", "SSDT", 1, "INSYDE", "EDK2    ", 0x00001000)
             Name (DBDC, Zero)
             Name (AMAT, 0x78)
             Name (AMIT, 0xFF88)
-            Name (ATPP, 0x01B8)
+            Name (ATPP, 0x0230)
             Name (ATP2, 0x0208)
-            Name (DTPP, 0x0104)
+            Name (DTPP, 0x0230)
             Name (TPPL, Zero)
             Name (DROS, Zero)
             Name (HPCT, 0x02)
@@ -1161,6 +1161,13 @@ DefinitionBlock ("", "SSDT", 1, "INSYDE", "EDK2    ", 0x00001000)
             Name (CNPL, 0x36)
             Name (CDIS, Zero)
             Name (CUSL, Zero)
+            Name (T5C, Zero)
+            Name (T5V, Zero)
+            Name (T6C, Zero)
+            Name (T6V, Zero)
+            Name (DBOF, Zero)   // 0 = DB on (stock: GPU 140W via borrow), 1 = DB off (GPU base TGP 115W, CPU keeps full power); written by DBUL WMTF Method 1, read by fun#2's DBAC
+            Name (MGAF, 0xC8)   // DB borrow cap in 0.5W units (0xC8 = stock 100W max allowance); written by DBUL WMTF Method 20 (watts), read by fun#2's MAGA
+            Name (TGPF, 0x0118) // GPU power budget in 0.5W units (0x0118 = stock 140W, performance-mode branches only; office ITSM==0 keeps stock 60W); written by DBUL WMTF Method 22 (watts), read by fun#2's TGPA
             Name (CUCT, Zero)
             Method (_HID, 0, NotSerialized)  // _HID: Hardware ID
             {
@@ -1260,66 +1267,66 @@ DefinitionBlock ("", "SSDT", 1, "INSYDE", "EDK2    ", 0x00001000)
                             {
                                 If ((\_SB.PCI0.LPC0.H_EC.ECRD (RefOf (\_SB.PCI0.LPC0.H_EC.CPUT)) == 0x07))
                                 {
-                                    ATPP = 0x01B8
+                                    ATPP = 0x0230
                                 }
 
                                 If ((\_SB.PCI0.LPC0.H_EC.ECRD (RefOf (\_SB.PCI0.LPC0.H_EC.ITSM)) == One))
                                 {
-                                    DBAC = Zero
-                                    TGPA = 0x0118
+                                    DBAC = DBOF
+                                    TGPA = TGPF
                                     MIGA = Zero
-                                    MAGA = 0xC8
+                                    MAGA = MGAF
                                     TPPA = ATPP /* \_SB_.NPCF.ATPP */
                                 }
                                 ElseIf ((\_SB.PCI0.LPC0.H_EC.ECRD (RefOf (\_SB.PCI0.LPC0.H_EC.ITSM)) == Zero))
                                 {
-                                    DBAC = Zero
+                                    DBAC = DBOF
                                     TGPA = 0x78
                                     MIGA = Zero
-                                    MAGA = 0xC8
+                                    MAGA = MGAF
                                     TPPA = ATPP /* \_SB_.NPCF.ATPP */
                                 }
                                 Else
                                 {
-                                    DBAC = Zero
-                                    TPPA = 0x01B8
+                                    DBAC = One
+                                    TPPA = 0x0230
                                 }
                             }
                             Else
                             {
                                 If ((\_SB.PCI0.LPC0.H_EC.ECRD (RefOf (\_SB.PCI0.LPC0.H_EC.CPUT)) == 0x07))
                                 {
-                                    ATPP = 0x01B8
-                                    ATP2 = 0x01B8
+                                    ATPP = 0x0230
+                                    ATP2 = 0x0230
                                 }
 
                                 If ((\_SB.PCI0.LPC0.H_EC.ECRD (RefOf (\_SB.PCI0.LPC0.H_EC.ITSM)) == One))
                                 {
-                                    DBAC = Zero
-                                    TGPA = 0x0118
+                                    DBAC = DBOF
+                                    TGPA = TGPF
                                     MIGA = Zero
-                                    MAGA = 0xC8
+                                    MAGA = MGAF
                                     TPPA = ATP2 /* \_SB_.NPCF.ATP2 */
                                 }
                                 ElseIf ((\_SB.PCI0.LPC0.H_EC.ECRD (RefOf (\_SB.PCI0.LPC0.H_EC.ITSM)) == Zero))
                                 {
-                                    DBAC = Zero
+                                    DBAC = DBOF
                                     TGPA = 0x78
                                     MIGA = Zero
-                                    MAGA = 0xC8
+                                    MAGA = MGAF
                                     TPPA = ATPP /* \_SB_.NPCF.ATPP */
                                 }
                                 Else
                                 {
-                                    DBAC = Zero
-                                    TPPA = 0x01B8
+                                    DBAC = One
+                                    TPPA = 0x0230
                                 }
                             }
 
-                            TGPD = DCBT /* \_SB_.NPCF.DCBT */
+                            TGPD = TGPA
                             PC01 = Zero
                             PC02 = (DBAC | (DBDC << One))
-                            TPPD = DTPP /* \_SB_.NPCF.DTPP */
+                            TPPD = TPPA
                             DROP = DROS /* \_SB_.NPCF.DROS */
                         }
 
@@ -1359,16 +1366,17 @@ DefinitionBlock ("", "SSDT", 1, "INSYDE", "EDK2    ", 0x00001000)
                         Debug = "   NVPCF sub-func#3"
                         Return (Buffer (0x3D)
                         {
-                            /* 0000 */  0x11, 0x04, 0x13, 0x03, 0x00, 0xFF, 0x00, 0x28,  // .......(
-                            /* 0008 */  0x2D, 0x2D, 0x33, 0x33, 0x39, 0x39, 0x3F, 0x3F,  // --3399??
-                            /* 0010 */  0x45, 0x42, 0x4B, 0x46, 0x50, 0xFF, 0xFF, 0x05,  // EBKFP...
-                            /* 0018 */  0xFF, 0x00, 0x3C, 0x41, 0x41, 0x46, 0x46, 0x4B,  // ..<AAFFK
+                            /* 0000 */  0x11, 0x04, 0x13, 0x03, 0x00, 0xFF, 0x00, 0x64,  // .......d
+                            /* 0008 */  0x64, 0x64, 0x64, 0x64, 0x64, 0x64, 0x64, 0x64,  // ........
+                            /* 0010 */  0x64, 0x64, 0x64, 0x64, 0x64, 0x64, 0xFF, 0xFF,  // ........
+                            /* 0018 */  0xFF, 0x00, 0x64, 0x64, 0x64, 0x64, 0x64, 0x64,  // ........
                             /* 0020 */  0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,  // ........
                             /* 0028 */  0xFF, 0xFF, 0x02, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,  // ........
                             /* 0030 */  0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,  // ........
-                            /* 0038 */  0x00, 0x30, 0x34, 0x34, 0x3A                     // .044:
+                            /* 0038 */  0x00, 0x64, 0x64, 0x64, 0x64                     // .dddd
                         })
                     }
+
                     Case (0x04)
                     {
                         Debug = "   NVPCF sub-func#4"
@@ -1441,6 +1449,8 @@ DefinitionBlock ("", "SSDT", 1, "INSYDE", "EDK2    ", 0x00001000)
                             Case (0x03)
                             {
                                 CUSL = (F5P1 & 0xFF)
+                                T5C++
+                                T5V = F5P1
                             }
                             Case (0x04)
                             {
@@ -1527,6 +1537,8 @@ DefinitionBlock ("", "SSDT", 1, "INSYDE", "EDK2    ", 0x00001000)
 
                         }
 
+                        T6C++
+                        T6V = NCHP
                         Return (PBD6) /* \_SB_.NPCF.NPCF.PBD6 */
                     }
                     Case (0x07)

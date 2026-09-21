@@ -37,8 +37,8 @@ static VOID UefiZeroMem(VOID *Dest, UINTN Size)
 }
 
 /**
- * Locate existing ACPI BGRT table in XSDT, or dynamically create and inject
- * a new BGRT table into XSDT (HackBGRT method).
+ * 在 XSDT 中定位现有 ACPI BGRT 表；找不到则动态创建并注入一张新 BGRT
+ * （HackBGRT 方式）。两种情况都不直接改写固件内存，统一走副本+重定向。
  */
 static EFI_STATUS CreateOrUpdateBgrt(
     EFI_SYSTEM_TABLE *SystemTable,
@@ -72,7 +72,7 @@ static EFI_STATUS CreateOrUpdateBgrt(
     EntryCount = (Xsdt->Length - sizeof(EFI_ACPI_SDT_HEADER)) / sizeof(UINT64);
     EntryPtr = (UINT64 *)((UINT8 *)Xsdt + sizeof(EFI_ACPI_SDT_HEADER));
 
-    // 1. Search for existing BGRT in XSDT
+    // 1. 在 XSDT 中查找现有 BGRT
     for (i = 0; i < EntryCount; i++) {
         EFI_ACPI_SDT_HEADER *Table = (EFI_ACPI_SDT_HEADER *)(UINTN)(EntryPtr[i]);
         if (IsValidAcpiPointer(Table) && Table->Signature == ACPI_SIG_BGRT) {
@@ -82,27 +82,69 @@ static EFI_STATUS CreateOrUpdateBgrt(
     }
 
     if (Bgrt != NULL) {
-        // Case A: Existing BGRT table found -> update in place
-        Bgrt->Version = 1;
-        Bgrt->Status = 1;       // Bit 0 = 1: Image is displayed on screen
-        Bgrt->ImageType = 0;    // 0 = Bitmap
-        Bgrt->ImageAddress = (UINT64)BmpAddress;
-        Bgrt->ImageOffsetX = OffsetX;
-        Bgrt->ImageOffsetY = OffsetY;
+        // Case A: 固件已有 BGRT 表。不改写固件内存里的表（部分 OEM 的 ACPI
+        // 页面只读，直接写会静默失败）——复制到自分配的 ACPI Reclaim 页，
+        // 修改副本后把 XSDT 条目重定向过去，与整表替换（AcpiPatch.c）同风格。
+        // 此时 XSDT 已是 ReplaceAcpiTables 分配的可写副本，条目可安全改写。
+        EFI_PHYSICAL_ADDRESS NewBgrtAddr = 0xFFFFFFFFULL;
+        UINTN BgrtPages = (Bgrt->Header.Length + 4095) / 4096;
+        EFI_ACPI_5_0_BOOT_GRAPHICS_RESOURCE_TABLE *NewBgrt;
 
-        Bgrt->Header.Checksum = 0;
-        Bgrt->Header.Checksum = CalculateChecksum8((UINT8 *)Bgrt, Bgrt->Header.Length);
+        Status = BS->AllocatePages(AllocateMaxAddress, 9, BgrtPages, &NewBgrtAddr);
+        if (EFI_ERROR(Status)) {
+            LogStatusToFile(SystemTable, ImageHandle,
+                            L"[-] BGRT: Failed to allocate shadow copy of existing BGRT: ", Status);
+            return Status;
+        }
 
-        *OutBgrt = Bgrt;
-        LogToFile(SystemTable, ImageHandle, L"[+] BGRT: Existing ACPI BGRT table updated with new logo.");
+        NewBgrt = (EFI_ACPI_5_0_BOOT_GRAPHICS_RESOURCE_TABLE *)(UINTN)NewBgrtAddr;
+        UefiMemcpy(NewBgrt, Bgrt, Bgrt->Header.Length);
+
+        NewBgrt->Version = 1;
+        NewBgrt->Status = 1;       // Bit 0 = 1: 图像已显示在屏幕上
+        NewBgrt->ImageType = 0;    // 0 = 位图
+        NewBgrt->ImageAddress = (UINT64)BmpAddress;
+        NewBgrt->ImageOffsetX = OffsetX;
+        NewBgrt->ImageOffsetY = OffsetY;
+
+        NewBgrt->Header.Checksum = 0;
+        NewBgrt->Header.Checksum = CalculateChecksum8((UINT8 *)NewBgrt, NewBgrt->Header.Length);
+
+        // XSDT 条目重定向到副本
+        EntryPtr[i] = (UINT64)NewBgrtAddr;
+        Xsdt->Checksum = 0;
+        Xsdt->Checksum = CalculateChecksum8((UINT8 *)Xsdt, Xsdt->Length);
+
+        // RSDT 中指向旧 BGRT 的条目同步换新（与 AcpiPatch.c 的 SyncRsdt 同思路）
+        if (NewBgrtAddr <= 0xFFFFFFFFULL && Rsdp->RsdtAddress != 0) {
+            EFI_ACPI_SDT_HEADER *Rsdt = (EFI_ACPI_SDT_HEADER *)(UINTN)Rsdp->RsdtAddress;
+            if (IsValidAcpiPointer(Rsdt) && Rsdt->Signature == ACPI_SIG_RSDT) {
+                UINTN RsdtEntries = (Rsdt->Length - sizeof(EFI_ACPI_SDT_HEADER)) / sizeof(UINT32);
+                UINT32 *RsdtEntry = (UINT32 *)((UINT8 *)Rsdt + sizeof(EFI_ACPI_SDT_HEADER));
+                UINTN k;
+                for (k = 0; k < RsdtEntries; k++) {
+                    if (RsdtEntry[k] == (UINT32)(UINTN)Bgrt) {
+                        RsdtEntry[k] = (UINT32)NewBgrtAddr;
+                        Rsdt->Checksum = 0;
+                        Rsdt->Checksum = CalculateChecksum8((UINT8 *)Rsdt, Rsdt->Length);
+                    }
+                }
+            }
+        }
+
+        BS->InstallConfigurationTable(&gEfiAcpi20TableGuid, (VOID *)Rsdp);
+
+        *OutBgrt = NewBgrt;
+        LogToFile(SystemTable, ImageHandle,
+                  L"[+] BGRT: Existing BGRT shadow-copied and redirected with new logo.");
         return EFI_SUCCESS;
     }
 
-    // Case B: No BGRT table present -> allocate new BGRT and inject into XSDT (HackBGRT)
+    // Case B: 没有 BGRT 表 —— 分配新 BGRT 并注入 XSDT（HackBGRT）
     LogToFile(SystemTable, ImageHandle, L"[+] BGRT: No existing BGRT table in XSDT. Creating new BGRT table...");
 
-    EFI_PHYSICAL_ADDRESS NewBgrtAddr = 0;
-    Status = BS->AllocatePages(0, 9, 1, &NewBgrtAddr); // 9 = EfiACPIReclaimMemory
+    EFI_PHYSICAL_ADDRESS NewBgrtAddr = 0xFFFFFFFFULL;
+    Status = BS->AllocatePages(AllocateMaxAddress, 9, 1, &NewBgrtAddr); // 9 = EfiACPIReclaimMemory
     if (EFI_ERROR(Status)) {
         LogStatusToFile(SystemTable, ImageHandle, L"[-] BGRT: Failed to allocate memory for BGRT table: ", Status);
         return Status;
@@ -111,7 +153,7 @@ static EFI_STATUS CreateOrUpdateBgrt(
     Bgrt = (EFI_ACPI_5_0_BOOT_GRAPHICS_RESOURCE_TABLE *)(UINTN)NewBgrtAddr;
     UefiZeroMem(Bgrt, sizeof(EFI_ACPI_5_0_BOOT_GRAPHICS_RESOURCE_TABLE));
 
-    // Fill ACPI SDT Header
+    // 填充 ACPI SDT 表头
     Bgrt->Header.Signature = ACPI_SIG_BGRT;
     Bgrt->Header.Length = sizeof(EFI_ACPI_5_0_BOOT_GRAPHICS_RESOURCE_TABLE);
     Bgrt->Header.Revision = 1;
@@ -122,24 +164,24 @@ static EFI_STATUS CreateOrUpdateBgrt(
     Bgrt->Header.CreatorId = 0x454E4F4E; // "NONE"
     Bgrt->Header.CreatorRevision = 1;
 
-    // Fill BGRT fields
+    // 填充 BGRT 字段
     Bgrt->Version = 1;
-    Bgrt->Status = 1;       // Bit 0 = 1: Image is displayed on screen
-    Bgrt->ImageType = 0;    // 0 = Bitmap
+    Bgrt->Status = 1;       // Bit 0 = 1: 图像已显示在屏幕上
+    Bgrt->ImageType = 0;    // 0 = 位图
     Bgrt->ImageAddress = (UINT64)BmpAddress;
     Bgrt->ImageOffsetX = OffsetX;
     Bgrt->ImageOffsetY = OffsetY;
 
-    // Checksum
+    // 校验和
     Bgrt->Header.Checksum = CalculateChecksum8((UINT8 *)Bgrt, Bgrt->Header.Length);
 
-    // Expand XSDT to append the new BGRT pointer
+    // 扩容 XSDT 以追加新 BGRT 指针
     UINTN OldXsdtLength = Xsdt->Length;
     UINTN NewXsdtLength = OldXsdtLength + sizeof(UINT64);
     UINTN XsdtPagesNeeded = (NewXsdtLength + 4095) / 4096;
-    EFI_PHYSICAL_ADDRESS NewXsdtAddr = 0;
+    EFI_PHYSICAL_ADDRESS NewXsdtAddr = 0xFFFFFFFFULL;
 
-    Status = BS->AllocatePages(0, 9, XsdtPagesNeeded, &NewXsdtAddr);
+    Status = BS->AllocatePages(AllocateMaxAddress, 9, XsdtPagesNeeded, &NewXsdtAddr);
     if (EFI_ERROR(Status)) {
         LogStatusToFile(SystemTable, ImageHandle, L"[-] BGRT: Failed to allocate memory for expanded XSDT: ", Status);
         return Status;
@@ -148,14 +190,14 @@ static EFI_STATUS CreateOrUpdateBgrt(
     EFI_ACPI_SDT_HEADER *NewXsdt = (EFI_ACPI_SDT_HEADER *)(UINTN)NewXsdtAddr;
     UefiMemcpy(NewXsdt, Xsdt, OldXsdtLength);
 
-    // Append new BGRT pointer at the end of the entry array
+    // 在条目数组末尾追加新 BGRT 指针
     *(UINT64 *)((UINT8 *)NewXsdt + OldXsdtLength) = (UINT64)NewBgrtAddr;
 
     NewXsdt->Length = (UINT32)NewXsdtLength;
     NewXsdt->Checksum = 0;
     NewXsdt->Checksum = CalculateChecksum8((UINT8 *)NewXsdt, NewXsdt->Length);
 
-    // Update RSDP XSDT address and recalculate checksums
+    // 更新 RSDP 的 XSDT 地址并重算校验和
     Rsdp->XsdtAddress = (UINT64)NewXsdtAddr;
 
     Rsdp->Checksum = 0;
@@ -165,16 +207,16 @@ static EFI_STATUS CreateOrUpdateBgrt(
     Rsdp->ExtendedChecksum = 0;
     Rsdp->ExtendedChecksum = CalculateChecksum8((UINT8 *)Rsdp, RsdpLength);
 
-    // Sync RSDT if within 32-bit range
+    // 地址在 32 位范围内时同步 RSDT
     if (NewBgrtAddr <= 0xFFFFFFFFULL && Rsdp->RsdtAddress != 0) {
         EFI_ACPI_SDT_HEADER *OldRsdt = (EFI_ACPI_SDT_HEADER *)(UINTN)Rsdp->RsdtAddress;
         if (IsValidAcpiPointer(OldRsdt) && OldRsdt->Signature == ACPI_SIG_RSDT) {
             UINTN OldRsdtLength = OldRsdt->Length;
             UINTN NewRsdtLength = OldRsdtLength + sizeof(UINT32);
             UINTN RsdtPages = (NewRsdtLength + 4095) / 4096;
-            EFI_PHYSICAL_ADDRESS NewRsdtAddr = 0;
+            EFI_PHYSICAL_ADDRESS NewRsdtAddr = 0xFFFFFFFFULL;
 
-            if (!EFI_ERROR(BS->AllocatePages(0, 9, RsdtPages, &NewRsdtAddr))) {
+            if (!EFI_ERROR(BS->AllocatePages(AllocateMaxAddress, 9, RsdtPages, &NewRsdtAddr))) {
                 EFI_ACPI_SDT_HEADER *NewRsdt = (EFI_ACPI_SDT_HEADER *)(UINTN)NewRsdtAddr;
                 UefiMemcpy(NewRsdt, OldRsdt, OldRsdtLength);
                 *(UINT32 *)((UINT8 *)NewRsdt + OldRsdtLength) = (UINT32)NewBgrtAddr;
@@ -190,6 +232,8 @@ static EFI_STATUS CreateOrUpdateBgrt(
             }
         }
     }
+
+    BS->InstallConfigurationTable(&gEfiAcpi20TableGuid, (VOID *)Rsdp);
 
     *OutBgrt = Bgrt;
     LogToFile(SystemTable, ImageHandle, L"[+] BGRT: Successfully injected new ACPI BGRT table into XSDT.");
@@ -233,7 +277,7 @@ EFI_STATUS PatchBgrtAndDrawLogo(
 
     LogToFile(SystemTable, ImageHandle, L"[+] BGRT: Starting BGRT hijack and GOP display...");
 
-    // 1. Locate GOP
+    // 1. 定位 GOP
     Status = BS->LocateProtocol(&gEfiGraphicsOutputProtocolGuid, NULL, (VOID **)&Gop);
     if (EFI_ERROR(Status) || Gop == NULL || Gop->Mode == NULL || Gop->Mode->Info == NULL) {
         LogStatusToFile(SystemTable, ImageHandle, L"[-] BGRT: Locate GOP failed: ", Status);
@@ -243,7 +287,7 @@ EFI_STATUS PatchBgrtAndDrawLogo(
     ScreenW = Gop->Mode->Info->HorizontalResolution;
     ScreenH = Gop->Mode->Info->VerticalResolution;
 
-    // Calculate center coordinates
+    // 计算居中坐标
     if (ScreenW > BmpWidth) {
         OffsetX = (ScreenW - BmpWidth) / 2;
     } else {
@@ -255,9 +299,10 @@ EFI_STATUS PatchBgrtAndDrawLogo(
         OffsetY = 0;
     }
 
-    // 2. Allocate ACPI Reclaim Memory for the BMP file so Windows bootmgr can read it
+    // 2. 为 BMP 文件分配 ACPI Reclaim 内存，让 Windows bootmgr 可读
     PagesNeeded = (gBootIconSize + 4095) / 4096;
-    Status = BS->AllocatePages(0, 9, PagesNeeded, &NewBmpAddr); // 9 = EfiACPIReclaimMemory
+    NewBmpAddr = 0xFFFFFFFFULL;
+    Status = BS->AllocatePages(AllocateMaxAddress, 9, PagesNeeded, &NewBmpAddr); // 9 = EfiACPIReclaimMemory
     if (EFI_ERROR(Status)) {
         LogStatusToFile(SystemTable, ImageHandle, L"[-] BGRT: Failed to allocate ACPI Reclaim memory: ", Status);
         return Status;
@@ -265,25 +310,25 @@ EFI_STATUS PatchBgrtAndDrawLogo(
 
     UefiMemcpy((VOID *)(UINTN)NewBmpAddr, gBootIconData, gBootIconSize);
 
-    // 3. Locate or inject ACPI BGRT table
+    // 3. 定位或注入 ACPI BGRT 表
     Status = CreateOrUpdateBgrt(SystemTable, ImageHandle, Rsdp, NewBmpAddr, OffsetX, OffsetY, &Bgrt);
     if (EFI_ERROR(Status)) {
         LogStatusToFile(SystemTable, ImageHandle, L"[-] BGRT: CreateOrUpdateBgrt failed: ", Status);
     }
 
-    // 4. Clear screen to wipe OEM vendor logo and earlier console text
+    // 4. 清屏擦掉 OEM 厂标与之前的控制台文本
     SystemTable->ConOut->EnableCursor(SystemTable->ConOut, FALSE);
     SystemTable->ConOut->ClearScreen(SystemTable->ConOut);
 
-    // 5. Draw BMP on screen via GOP Blt to replace the vendor logo on display
-    // Support 24-bit uncompressed BMP (tools/logo.bmp)
+    // 5. 经 GOP Blt 把 BMP 画上屏，替换显示中的厂标
+    // 仅支持 24 位无压缩 BMP（tools/logo.bmp）
     if (BmpHdr->BitCount == 24 && BmpHdr->Compression == 0) {
         Status = BS->AllocatePool(2, BmpWidth * BmpHeight * sizeof(EFI_GRAPHICS_OUTPUT_BLT_PIXEL), (VOID **)&BltBuf);
         if (!EFI_ERROR(Status) && BltBuf != NULL) {
             RowSize = ((BmpWidth * 3 + 3) / 4) * 4;
             PixelData = (UINT8 *)gBootIconData + BmpHdr->OffBits;
 
-            // BMP stores pixels bottom-to-top
+            // BMP 像素自底向上存储
             for (Row = 0; Row < BmpHeight; Row++) {
                 UINT8 *SrcRow = PixelData + (BmpHeight - 1 - Row) * RowSize;
                 EFI_GRAPHICS_OUTPUT_BLT_PIXEL *DstRow = BltBuf + Row * BmpWidth;
@@ -295,7 +340,7 @@ EFI_STATUS PatchBgrtAndDrawLogo(
                 }
             }
 
-            // Blt buffer to video screen
+            // 把缓冲 Blt 到显存
             Status = Gop->Blt(
                 Gop,
                 BltBuf,
@@ -313,7 +358,7 @@ EFI_STATUS PatchBgrtAndDrawLogo(
             } else {
                 LogStatusToFile(SystemTable, ImageHandle, L"[-] BGRT: GOP Blt failed: ", Status);
                 if (Bgrt != NULL) {
-                    Bgrt->Status = 0; // Windows bootmgr fallback display
+                    Bgrt->Status = 0; // 交回 Windows bootmgr 兜底显示
                     Bgrt->Header.Checksum = 0;
                     Bgrt->Header.Checksum = CalculateChecksum8((UINT8 *)Bgrt, Bgrt->Header.Length);
                 }

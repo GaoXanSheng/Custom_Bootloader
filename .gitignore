@@ -1,10 +1,12 @@
 # Build outputs
 build/
+cmake-build-*/
 
-# Editor / IDE
+# Editor / IDE / Agents
 .vs/
 .vscode/
 .idea/
+.zcode/
 *.swp
 *.swo
 *~
@@ -17,6 +19,9 @@ build/
 # Python cache
 __pycache__/
 *.pyc
+
+# Local reference firmware / dumps
+R9000P/
 
 # Auto-generated at build time (see tools/generate_version.py)
 version.txt

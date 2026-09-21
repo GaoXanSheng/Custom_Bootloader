@@ -4639,6 +4639,20 @@ DefinitionBlock ("", "DSDT", 2, "INSYDE", "EDK2    ", 0x00000002)
                                 ECWT (Zero, RefOf (CMEN))
                             }
 
+                            // 开机满血初始化。这是权威钩子：此处 ECAV 必已
+                            // 置位，每条 ECWT 都会落地。DBUL SSDT 的 _INI 只是
+                            // 备份，部分开机中会与本 _REG 竞态（EC region 接通
+                            // 前其 ECWT 静默空跑）。与 DBUL _INI 同值：
+                            // GFLG=0x55/GPMD=1 GPU 满血令牌+模式；
+                            // CSPL=0x6E(110W)/FPPT=0x78(120W) 整机功耗墙默认
+                            // —— 110W CPU + 140W GPU + 30W 外设 = 280W 打满
+                            // 适配器预算。CSPL 是整机墙的本体：此后每次
+                            // FNQS/COMM 都经 MSPL 把 max(EC CSPL, 下限) 重推
+                            // 给 SMU，覆盖 THMD profile 的 SPL 值。
+                            ECWT (0x55, RefOf (GFLG))
+                            ECWT (One, RefOf (GPMD))
+                            ECWT (0x6E, RefOf (CSPL))
+                            ECWT (0x78, RefOf (FPPT))
                             Local0 = ECRD (RefOf (ITSM))
                             FNQS (Local0)
                             COMM ()
@@ -4979,13 +4993,32 @@ DefinitionBlock ("", "DSDT", 2, "INSYDE", "EDK2    ", 0x00000002)
 
                     Method (FNQS, 1, Serialized)
                     {
-                        If ((ToInteger (Arg0) == Zero))
+                        // DB 感知换档（R9000P FNQT 协调架构的复刻）。
+                        // 极性依据（2026-09-21）：原厂 FNQS 两个分支均以
+                        // DBFS == Zero 派发高瓦行（THMD(Zero)/0x13），且历史
+                        // 实验"强制 DBFS=Zero → GPU 锁 105W"证明 0=平台视
+                        // 为 DB 关。若实机验证极性相反，对调下方两个分支体
+                        // 即可（各 2 行）。
+                        // 协调逻辑：DB 借电在途（DBFS==One）→ 平台主动降到
+                        // 85W 行（THMD(0x13)，实测 CPU 自由的那一行）并同步
+                        // EC CSPL=85，期望 EC 因平台已让电而不再施加 40W
+                        // 硬压；无借电 → 恢复满血行与 CSPL=110W。
+                        If ((DBFS == Zero))
                         {
-                            THMD (0x14)
+                            ECWT (0x6E, RefOf (CSPL))
+                            If ((ToInteger (Arg0) == Zero))
+                            {
+                                THMD (0x13)
+                            }
+                            Else
+                            {
+                                THMD (Zero)
+                            }
                         }
                         Else
                         {
-                            THMD (Zero)
+                            ECWT (0x55, RefOf (CSPL))
+                            THMD (0x13)
                         }
 
                         MSPL ()
@@ -5018,17 +5051,14 @@ DefinitionBlock ("", "DSDT", 2, "INSYDE", "EDK2    ", 0x00000002)
                         MODP (0x06, Local0)
                     }
 
-
                     Method (COMM, 0, Serialized)
                     {
-                        If ((ECRD (RefOf (CMEN)) == One))
-                        {
-                            MSPL ()
-                            MFPT ()
-                            Local0 = ECRD (RefOf (CTCL))
-                            MODP (0x03, Local0)
-                        }
+                        MSPL ()
+                        MFPT ()
+                        Local0 = ECRD (RefOf (CTCL))
+                        MODP (0x03, Local0)
                     }
+
 
                     Method (MODP, 2, Serialized)
                     {
@@ -5294,14 +5324,54 @@ DefinitionBlock ("", "DSDT", 2, "INSYDE", "EDK2    ", 0x00000002)
                         Sleep (0x012C)
                         Notify (BAT0, 0x80) // Status Change
                         Notify (ADP1, 0x80) // Status Change
+                        Local1 = (ECRD (RefOf (AWHG)) << 0x08)
+                        Local1 += ECRD (RefOf (AWLW))
+                        If ((ECRD (RefOf (ECWR)) & One))
+                        {
+                            If ((Local1 > 0xC8))
+                            {
+                                Local0 = ECRD (RefOf (ITSM))
+                                FNQS (Local0)
+                            }
+                            Else
+                            {
+                                If ((ECRD (RefOf (CMEN)) == One))
+                                {
+                                    ECWT (Zero, RefOf (CMEN))
+                                }
+
+                                GPSF = One
+                                DGST = 0xD1
+                                Local0 = ECRD (RefOf (ITSM))
+                                FNQS (Local0)
+                            }
+                        }
+                        Else
+                        {
+                            If ((ECRD (RefOf (CMEN)) == One))
+                            {
+                                ECWT (Zero, RefOf (CMEN))
+                            }
+
+                            If ((ECRD (RefOf (ITSM)) == One))
+                            {
+                                ECWT (Zero, RefOf (ITSM))
+                                FNQS (Zero)
+                                ECWT (0x55, RefOf (TFLG))
+                            }
+                            Else
+                            {
+                                Local0 = ECRD (RefOf (ITSM))
+                                FNQS (Local0)
+                            }
+                        }
+
                         Local0 = ECRD (RefOf (ITSM))
-                        FNQS (Local0)
                         ^^^WMID.EVBU [Zero] = One
                         ^^^WMID.EVBU [One] = 0x0F
                         ^^^WMID.EVBU [0x02] = Local0
                         Notify (WMID, 0x20) // Reserved
                     }
-
 
                     Method (_Q11, 0, NotSerialized)  // _Qxx: EC Query, xx=0x00-0xFF
                     {
@@ -5403,9 +5473,31 @@ DefinitionBlock ("", "DSDT", 2, "INSYDE", "EDK2    ", 0x00000002)
 
                         Method (_PSR, 0, NotSerialized)  // _PSR: Power Source
                         {
-                            Return (One)
-                        }
+                            Local0 = (^^PCI0.LPC0.H_EC.ECRD (RefOf (^^PCI0.LPC0.H_EC.ECWR)) & One)
+                            If (((Local0 != ACDC) || (ACDC == 0xFF)))
+                            {
+                                CreateWordField (XX00, Zero, SSZE)
+                                CreateByteField (XX00, 0x02, ACST)
+                                SSZE = 0x03
+                                ACDC = Local0
+                                If (ACDC)
+                                {
+                                    P80H = 0xECAC
+                                    ^^PCI0.GP17.VGA.AFN4 (One)
+                                    ACST = Zero
+                                }
+                                Else
+                                {
+                                    P80H = 0xECDC
+                                    ^^PCI0.GP17.VGA.AFN4 (0x02)
+                                    ACST = One
+                                }
 
+                                ALIB (One, XX00)
+                            }
+
+                            Return (Local0)
+                        }
 
                         Method (_PCL, 0, NotSerialized)  // _PCL: Power Consumer List
                         {

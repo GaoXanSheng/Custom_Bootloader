@@ -43,12 +43,12 @@ void LogToFile(EFI_SYSTEM_TABLE *SystemTable, EFI_HANDLE ImageHandle, const CHAR
     Status = Volume->OpenVolume(Volume, &RootDir);
     if (EFI_ERROR(Status) || RootDir == NULL) return;
 
-    // On the very first write during boot, delete the old log file to truncate it
+    // 在启动期间的第一次写入时，删除旧日志文件以截断它
     if (!LogInitialized) {
         Status = RootDir->Open(RootDir, &LogFile, L"\\EFI\\BOOT\\unlock.log", 
                                EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE, 0);
         if (!EFI_ERROR(Status) && LogFile != NULL) {
-            LogFile->Delete(LogFile); // This deletes the file and automatically closes the handle
+            LogFile->Delete(LogFile); // 这会删除该文件并自动关闭句柄
             LogFile = NULL;
         }
         LogInitialized = TRUE;
@@ -79,8 +79,8 @@ void LogToFile(EFI_SYSTEM_TABLE *SystemTable, EFI_HANDLE ImageHandle, const CHAR
         }
         LogFile->Close(LogFile);
     } else if (!LogWarningShown) {
-        // \EFI\BOOT may not exist (non-standard deployment) or the ESP is
-        // read-only: say so ONCE instead of failing silently every line.
+        // \EFI\BOOT 可能不存在（非标准部署），或者 ESP 是
+        // 只读的：因此只提示一次，而不是每一行都静默失败。
         LogWarningShown = TRUE;
         ConsolePrint(SystemTable,
                      L"  [!] ALARM: cannot open \\EFI\\BOOT\\unlock.log - logs disabled. "
@@ -105,6 +105,35 @@ void LogAddrToFile(EFI_SYSTEM_TABLE *SystemTable, EFI_HANDLE ImageHandle, UINT64
     }
     Buf[20] = 0;
     LogToFile(SystemTable, ImageHandle, Buf);
+}
+
+void LogU64ToFile(EFI_SYSTEM_TABLE *SystemTable, EFI_HANDLE ImageHandle, const CHAR16 *Prefix, UINT64 Value)
+{
+    CHAR16 Hex[20];
+    CHAR16 LogMsg[160];
+    UINTN k;
+    int i = 0, j = 0;
+    CHAR16 HexChars[] = L"0123456789ABCDEF";
+
+    Hex[0] = L'0';
+    Hex[1] = L'x';
+    for (k = 0; k < 16; k++) {
+        Hex[2 + k] = HexChars[(Value >> (60 - k * 4)) & 0xF];
+    }
+    Hex[18] = 0;
+
+    while (Prefix[i] != 0 && i < 100) {
+        LogMsg[i] = Prefix[i];
+        i++;
+    }
+    while (Hex[j] != 0 && i < 150) {
+        LogMsg[i] = Hex[j];
+        i++;
+        j++;
+    }
+    LogMsg[i] = 0;
+
+    LogToFile(SystemTable, ImageHandle, LogMsg);
 }
 
 void StatusToHex(EFI_STATUS Status, CHAR16 *Buffer)

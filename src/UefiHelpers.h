@@ -31,7 +31,14 @@ typedef UINT64 EFI_PHYSICAL_ADDRESS;
 #define EFI_NOT_FOUND 0x800000000000000EULL
 #define EFI_ERROR(status) (((long long)(status)) < 0)
 
-#define EFIAPI __cdecl
+/* UEFI 使用 Microsoft x64 调用约定。                          */
+/* MSVC x64：默认调用约定已经匹配，无需属性。   */
+/* GCC/Clang：显式请求 ms_abi 以避免 System V ABI 不匹配。     */
+#ifdef _MSC_VER
+  #define EFIAPI
+#else
+  #define EFIAPI __attribute__((ms_abi))
+#endif
 
 typedef struct {
     UINT32 Data1;
@@ -110,7 +117,7 @@ struct _EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL {
     void *Mode;
 };
 
-// EFI text attributes (foreground | (background << 4)); used by ConsolePrint.
+// EFI 文本属性（foreground | (background << 4)）；由 ConsolePrint 使用。
 #define EFI_BLACK        0x00
 #define EFI_RED          0x04
 #define EFI_LIGHTGRAY    0x07
@@ -150,15 +157,15 @@ typedef struct {
     UINT8  Reserved[3];      
 } EFI_ACPI_2_0_ROOT_SYSTEM_DESCRIPTION_POINTER;
 
-// ACPI 5.0 Boot Graphics Resource Table (BGRT)
+// ACPI 5.0 启动图形资源表（BGRT）
 typedef struct {
     EFI_ACPI_SDT_HEADER Header;
     UINT16 Version;         // 1
-    UINT8  Status;          // 1 = displayed
+    UINT8  Status;          // 1 = 已显示
     UINT8  ImageType;       // 0 = BMP
-    UINT64 ImageAddress;    // Physical address of the BMP image
-    UINT32 ImageOffsetX;    // X offset on screen
-    UINT32 ImageOffsetY;    // Y offset on screen
+    UINT64 ImageAddress;    // BMP 图像的物理地址
+    UINT32 ImageOffsetX;    // 屏幕上的 X 偏移
+    UINT32 ImageOffsetY;    // 屏幕上的 Y 偏移
 } EFI_ACPI_5_0_BOOT_GRAPHICS_RESOURCE_TABLE;
 
 struct _EFI_DEVICE_PATH_PROTOCOL {
@@ -236,7 +243,7 @@ typedef struct {
 } EFI_LOADED_IMAGE_PROTOCOL;
 
 // ---------------------------------------------------------------------------
-// Graphics Output Protocol (GOP)
+// 图形输出协议 (GOP)
 // ---------------------------------------------------------------------------
 typedef struct {
     UINT8 Blue;
@@ -350,6 +357,18 @@ typedef EFI_STATUS (EFIAPI *EFI_FREE_POOL) (
     VOID *Buffer
 );
 
+typedef enum {
+    AllocateAnyPages,
+    AllocateMaxAddress,
+    AllocateAddress,
+    MaxAllocateType
+} EFI_ALLOCATE_TYPE;
+
+typedef EFI_STATUS (EFIAPI *EFI_INSTALL_CONFIGURATION_TABLE) (
+    EFI_GUID *Guid,
+    VOID *Table
+);
+
 struct _EFI_BOOT_SERVICES {
     EFI_TABLE_HEADER Hdr;
     void* RaiseTPL;
@@ -373,7 +392,7 @@ struct _EFI_BOOT_SERVICES {
     void* RegisterProtocolNotify;
     void* LocateHandle;
     void* LocateDevicePath;
-    void* InstallConfigurationTable;
+    EFI_INSTALL_CONFIGURATION_TABLE InstallConfigurationTable;
     EFI_IMAGE_LOAD LoadImage;
     EFI_IMAGE_START StartImage;
     void* Exit;
