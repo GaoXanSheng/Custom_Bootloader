@@ -228,7 +228,7 @@ namespace DbgTool.Core
         private static string FindWindowsBootMgrGuid()
         {
             ProcessResult res = ProcessRunner.Run("bcdedit", "/enum firmware");
-            if (!res.Success) return null;
+            if (!res.Success) return "{bootmgr}";
 
             string currentId = null;
             string[] lines = res.CombinedOutput.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
@@ -236,7 +236,7 @@ namespace DbgTool.Core
             foreach (string raw in lines)
             {
                 string line = raw.Trim();
-                Match mId = Regex.Match(line, @"^(?:identifier|标识符)\s+(\{[0-9a-fA-F-]{36}\})", RegexOptions.IgnoreCase);
+                Match mId = Regex.Match(line, @"^(?:identifier|标识符)\s+(\{[^}]+\})", RegexOptions.IgnoreCase);
                 if (mId.Success)
                 {
                     currentId = mId.Groups[1].Value;
@@ -254,7 +254,7 @@ namespace DbgTool.Core
                     }
                 }
             }
-            return null;
+            return "{bootmgr}";
         }
 
         private static string GetFwbootmgrFirst()
@@ -273,13 +273,13 @@ namespace DbgTool.Core
                 {
                     inDisplayOrder = true;
                     string rest = mOrder.Groups[1].Value.Trim();
-                    Match first = Regex.Match(rest, @"\{[0-9a-fA-F-]{36}\}");
+                    Match first = Regex.Match(rest, @"\{[^}]+\}");
                     if (first.Success) return first.Value;
                     continue;
                 }
                 if (inDisplayOrder)
                 {
-                    Match cont = Regex.Match(line, @"^\{[0-9a-fA-F-]{36}\}$");
+                    Match cont = Regex.Match(line, @"^\{[^}]+\}$");
                     if (cont.Success) return cont.Value;
                     if (line.Length > 0) inDisplayOrder = false;
                 }
