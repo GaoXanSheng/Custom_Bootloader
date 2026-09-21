@@ -117,9 +117,9 @@ namespace DbgTool.Core
             ConsoleUI.Header("卸载 Custom Bootloader (还原系统引导)");
 
             Console.WriteLine("  操作内容:");
-            Console.WriteLine("    1. 清除 BCD 中所有 'Custom Bootloader' 启动项与 bootsequence");
+            Console.WriteLine("    1. 清除 BCD 中所有 'Custom Bootloader' 固件启动项与 bootsequence");
             Console.WriteLine("    2. 将 Windows Boot Manager 恢复为固件第一启动项");
-            Console.WriteLine("    3. 清理 ESP 分区中的引导文件（若有备份则还原原厂 BOOTX64.efi）");
+            Console.WriteLine("    (保留 ESP 分区中的文件不变，避免误还原损坏备份)");
             Console.WriteLine();
 
             if (!ConsoleUI.Confirm("确认执行卸载？", false))
@@ -155,57 +155,8 @@ namespace DbgTool.Core
                 ConsoleUI.Warn("未检索到 Windows Boot Manager GUID，请进入 BIOS 确认启动项顺序。");
             }
 
-            // 3. 清理 ESP 文件
-            using (EspMount esp = EspManager.Mount())
-            {
-                if (esp == null) return false;
-
-                try
-                {
-                    string bootDir = Path.Combine(esp.MountPoint, "EFI", "BOOT");
-                    string mainEfi = Path.Combine(bootDir, "BOOTX64.efi");
-                    string bakEfi = Path.Combine(bootDir, "BOOTX64.efi.bak");
-
-                    if (File.Exists(mainEfi))
-                    {
-                        if (File.Exists(bakEfi))
-                        {
-                            File.Copy(bakEfi, mainEfi, true);
-                            File.Delete(bakEfi);
-                            ConsoleUI.Info("已从备份还原原始 BOOTX64.efi");
-                        }
-                        else
-                        {
-                            File.Delete(mainEfi);
-                            ConsoleUI.Info("已删除 BOOTX64.efi");
-                        }
-                    }
-                    else if (File.Exists(bakEfi))
-                    {
-                        File.Move(bakEfi, mainEfi);
-                        ConsoleUI.Info("已从备份恢复原始 BOOTX64.efi");
-                    }
-
-                    string[] auxFiles = { "version.txt", "unlock.log" };
-                    foreach (string f in auxFiles)
-                    {
-                        string p = Path.Combine(bootDir, f);
-                        if (File.Exists(p))
-                        {
-                            File.Delete(p);
-                            ConsoleUI.Info("已清理临时文件: " + f);
-                        }
-                    }
-
-                    ConsoleUI.Info("Custom Bootloader 卸载完成，下次启动将由原生固件与 Windows 正常引导。");
-                    return true;
-                }
-                catch (Exception ex)
-                {
-                    ConsoleUI.Error("清理 ESP 文件失败: " + ex.Message);
-                    return false;
-                }
-            }
+            ConsoleUI.Info("Custom Bootloader 卸载完成，下次启动将由原生固件与 Windows 正常引导。");
+            return true;
         }
 
         private static string CreateEntry()
