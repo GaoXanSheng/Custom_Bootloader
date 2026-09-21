@@ -161,19 +161,37 @@ namespace DbgTool.Core
 
         private static string CreateEntry()
         {
-            // /application bootfw 创建 UEFI 固件引导项
-            ProcessResult res = ProcessRunner.Run("bcdedit", "/create /d \"" + BootEntryName + "\" /application bootfw");
+            // 方式 1：标准 UEFI 启动项克隆自 {bootmgr}（官方与主流 UEFI 工具标准做法）
+            ProcessResult res = ProcessRunner.Run("bcdedit", "/copy {bootmgr} /d \"" + BootEntryName + "\"");
             if (!res.Success)
             {
-                // 回退：直接使用 /create
-                res = ProcessRunner.Run("bcdedit", "/create /d \"" + BootEntryName + "\"");
-                if (!res.Success) return null;
+                // 方式 2：回退尝试 /create /application bootapp
+                res = ProcessRunner.Run("bcdedit", "/create /d \"" + BootEntryName + "\" /application bootapp");
+            }
+
+            if (!res.Success)
+            {
+                ConsoleUI.Error("创建/复制 BCD 启动项失败 (ExitCode: " + res.ExitCode + "): " + res.CombinedOutput.Trim());
+                return null;
             }
 
             Match m = Regex.Match(res.CombinedOutput, @"(\{[0-9a-fA-F-]{36}\})");
-            if (!m.Success) return null;
+            if (!m.Success)
+            {
+                ConsoleUI.Error("未能从 bcdedit 输出中解析出 GUID: " + res.CombinedOutput.Trim());
+                return null;
+            }
 
-            return m.Groups[1].Value;
+            string guid = m.Groups[1].Value;
+
+            // 清理克隆自 {bootmgr} 带来的多余属性
+            string[] cleanup = { "default", "resumeobject", "displayorder", "toolsdisplayorder", "timeout" };
+            foreach (string prop in cleanup)
+            {
+                ProcessRunner.Run("bcdedit", "/deletevalue " + guid + " " + prop);
+            }
+
+            return guid;
         }
 
         private static List<string> FindEntryGuids(string nameFilter)
