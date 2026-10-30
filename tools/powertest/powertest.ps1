@@ -13,6 +13,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+Set-Location -Path $PSScriptRoot
+$binDir = Join-Path $PSScriptRoot 'bin'
 
 if ($PSVersionTable.PSVersion.Major -lt 7) {
     Write-Host '[-] 需要 PowerShell 7 (pwsh)，请通过 run.bat 启动。' -ForegroundColor Red
@@ -36,6 +38,10 @@ if (-not $isAdmin -and -not $NoElevate) {
     exit
 }
 
+if (-not $LhmDll) {
+    $localLhm = Join-Path $binDir 'LibreHardwareMonitorLib.dll'
+    if (Test-Path $localLhm) { $LhmDll = $localLhm }
+}
 if (-not $LhmDll) {
     $found = Get-ChildItem 'D:\software' -Recurse -Filter LibreHardwareMonitorLib.dll -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($found) { $LhmDll = $found.FullName }
@@ -69,6 +75,10 @@ if ((-not (Test-Path $gpuExe)) -or ((Get-Item $gpuExe).LastWriteTime -lt (Get-It
 }
 
 if (-not $FurmarkExe) {
+    $localFm = Join-Path $binDir 'FurMark\furmark.exe'
+    if (Test-Path $localFm) { $FurmarkExe = $localFm }
+}
+if (-not $FurmarkExe) {
     $fm = 'D:\software\图吧工具箱\src\Tools\烤鸡工具\FurMark_win64\furmark.exe'
     if (Test-Path $fm) {
         $FurmarkExe = $fm
@@ -77,6 +87,8 @@ if (-not $FurmarkExe) {
         if ($foundFm) { $FurmarkExe = $foundFm.FullName }
     }
 }
+Write-Host ('[+] LHM: ' + $LhmDll)
+if ($FurmarkExe) { Write-Host ('[+] FurMark: ' + $FurmarkExe) }
 
 $PowerType = [LibreHardwareMonitor.Hardware.SensorType]::Power
 $TempType = [LibreHardwareMonitor.Hardware.SensorType]::Temperature
