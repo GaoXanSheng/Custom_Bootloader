@@ -37,4 +37,5 @@ tools/DbgTool/DbgTool.exe
 tools/powertest/stress.exe
 tools/powertest/stress.pdb
 tools/powertest/gputest.exe
+tools/powertest/bin/
 tools/powertest/results/

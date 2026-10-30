@@ -80,9 +80,10 @@ TX 链没有确认环节，资产在位时每次启动都会执行。解锁是�
 
 ## 功耗测试
 
-`tools\powertest\run.bat` 一键双烤：FurMark 加 32 线程 CPU 压力，默认 30 秒，输出最后 20 秒的平均 CPU / GPU / 合计功耗。
+`tools\powertest\run.bat` 一键双烤：FurMark 加 32 线程 CPU 压力，默认 30 秒，输出最后 20 秒的平均 CPU / GPU / 合计功耗。细节和依赖说明见 [tools/powertest/README.md](tools/powertest/README.md)。
 
-- 需要 PowerShell 7、FurMark（默认在 `D:\software` 下查找）、LibreHardwareMonitorLib.dll
+- 需要 PowerShell 7，依赖文件放在 `tools/powertest/bin`：`FurMark/furmark.exe`、`LibreHardwareMonitorLib.dll` 及其本地 DLL。脚本优先用这些相对路径，找不到才去 `D:\software` 搜索，也可以用 `-FurmarkExe` / `-LhmDll` 指定。
+- `bin/` 是本地文件，不进仓库（约 53 MB）。
 - CPU 功耗需要管理员权限（脚本会自提权）
 - `-GpuOnly` 只烤 GPU，`-Width`/`-Height`/`-Msaa` 调渲染负载，`-MinW` 设合计阈值
 - GPU 限值直接读 `nvidia-smi`，默认与当前功耗墙都会打印
