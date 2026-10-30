@@ -1,5 +1,6 @@
 # Build outputs
 build/
+target/
 cmake-build-*/
 
 # Editor / IDE / Agents
@@ -22,13 +23,18 @@ __pycache__/
 
 # Local reference firmware / dumps
 R9000P/
+tools/acpi/
+tools/isal/
 
 # Auto-generated at build time
 version.txt
-src/Version.h
 tools/DbgTool/VersionInfo.cs
 
 # Built binaries in root/tools (build/ already ignored)
 BOOTX64.efi
 DbgTool.exe
 tools/DbgTool/DbgTool.exe
+tools/powertest/stress.exe
+tools/powertest/stress.pdb
+tools/powertest/gputest.exe
+tools/powertest/results/

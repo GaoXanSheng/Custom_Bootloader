@@ -173,6 +173,50 @@ namespace DbgTool.Core
                         ConsoleUI.Warn("未找到 version.txt（跳过版本文件同步）");
                     }
 
+                    // 批量同步 Custom ACPI 补丁表（build\Custom\*.aml）到 ESP:\EFI\Custom\
+                    string customSrcDir = PathResolver.FindCustomDir();
+                    ConsoleUI.Info("ACPI 补丁源目录: " + (customSrcDir ?? "[未找到]"));
+                    string[] amlFiles = PathResolver.FindCustomAmlFiles();
+                    if (amlFiles != null && amlFiles.Length > 0)
+                    {
+                        string customDir = Path.Combine(esp.MountPoint, "EFI", "Custom");
+                        if (!Directory.Exists(customDir))
+                        {
+                            Directory.CreateDirectory(customDir);
+                            ConsoleUI.Info("创建目标目录: " + customDir);
+                        }
+
+                        int syncdCount = 0;
+                        foreach (string amlSrc in amlFiles)
+                        {
+                            string fileName = Path.GetFileName(amlSrc);
+                            string amlDst = Path.Combine(customDir, fileName);
+                            if (File.Exists(amlDst))
+                            {
+                                string amlBak = amlDst + ".bak";
+                                File.Copy(amlDst, amlBak, true);
+                            }
+
+                            File.Copy(amlSrc, amlDst, true);
+                            string srcAmlSha = ComputeSha256(amlSrc);
+                            string dstAmlSha = ComputeSha256(amlDst);
+                            if (string.Equals(srcAmlSha, dstAmlSha, StringComparison.OrdinalIgnoreCase))
+                            {
+                                ConsoleUI.Info("已同步 ACPI 补丁表到 ESP: EFI\\Custom\\" + fileName);
+                                syncdCount++;
+                            }
+                            else
+                            {
+                                ConsoleUI.Warn("ACPI 补丁表 " + fileName + " 写入后哈希校验不匹配！");
+                            }
+                        }
+                        ConsoleUI.Info("已完成批量部署: 共同步 " + syncdCount + " 个 ACPI 补丁表至 EFI\\Custom\\");
+                    }
+                    else
+                    {
+                        ConsoleUI.Error("未在 build\\Custom\\ 发现 *.aml 补丁表（引导器启动时将以原厂直通模式运行）！");
+                    }
+
                     return true;
                 }
                 catch (Exception ex)
@@ -213,6 +257,30 @@ namespace DbgTool.Core
                 else
                 {
                     ConsoleUI.Warn("ESP 中未找到 EFI\\BOOT\\unlock.log (请先通过 Custom Bootloader 引导一次系统)");
+                }
+
+                string customDir = Path.Combine(esp.MountPoint, "EFI", "Custom");
+                Console.WriteLine();
+                if (Directory.Exists(customDir))
+                {
+                    string[] espAmls = Directory.GetFiles(customDir, "*.aml");
+                    if (espAmls.Length > 0)
+                    {
+                        ConsoleUI.Info("检测到 ESP 上的 ACPI 补丁表 (" + espAmls.Length + " 个):");
+                        foreach (string a in espAmls)
+                        {
+                            var fi = new FileInfo(a);
+                            Console.WriteLine("    - " + Path.GetFileName(a) + " (" + fi.Length + " 字节)");
+                        }
+                    }
+                    else
+                    {
+                        ConsoleUI.Warn("EFI\\Custom 目录下未检测到 *.aml 补丁表（引导器将以直通模式运行）");
+                    }
+                }
+                else
+                {
+                    ConsoleUI.Warn("ESP 上未检测到 EFI\\Custom 目录（引导器将以直通模式运行）");
                 }
             }
         }

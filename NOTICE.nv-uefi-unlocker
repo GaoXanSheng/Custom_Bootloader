@@ -1,0 +1,14 @@
+Vendored from https://github.com/physicsdolphin/nv-uefi-unlocker
+commit 4a8170967802ed0f57a21d43f7949a7f2b45a528 (2026-10-30)
+License: GPL-2.0-only (see LICENSE.nv-uefi-unlocker)
+
+Files copied verbatim:
+  src/pci.rs
+  src/tx.rs
+  src/tx_booter.rs
+  src/tx_fwsec.rs
+  src/tx_detach.rs
+  src/tx_portal.rs
+
+Derived:
+  src/nv.rs  (tx_phase/tx_one_card from loader/src/main.rs)
