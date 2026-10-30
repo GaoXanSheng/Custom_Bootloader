@@ -1,0 +1,24 @@
+[package]
+name = "custom-bootloader"
+version = "1.0.3"
+edition = "2021"
+build = "build.rs"
+
+[[bin]]
+name = "BOOTX64"
+path = "src/main.rs"
+
+[features]
+default = ["tx"]
+tx = []
+
+[dependencies]
+log = { version = "0.4", default-features = false }
+uefi = { version = "0.41", features = ["alloc", "global_allocator", "panic_handler"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

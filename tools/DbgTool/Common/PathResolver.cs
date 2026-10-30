@@ -63,6 +63,36 @@ namespace DbgTool.Common
             return null;
         }
 
+        public static string FindCustomDir()
+        {
+            string[] candidates = {
+                Path.Combine(AppDir, "Custom"),
+                Path.Combine(ProjectRoot, "build", "Custom"),
+                Path.Combine(ProjectRoot, "Custom"),
+                Path.Combine(Environment.CurrentDirectory, "Custom")
+            };
+
+            foreach (string p in candidates)
+            {
+                if (Directory.Exists(p)) return Path.GetFullPath(p);
+            }
+            return null;
+        }
+
+        public static string[] FindCustomAmlFiles()
+        {
+            string dir = FindCustomDir();
+            if (dir != null && Directory.Exists(dir))
+            {
+                try
+                {
+                    return Directory.GetFiles(dir, "*.aml");
+                }
+                catch { }
+            }
+            return new string[0];
+        }
+
         public static string FindEfiFile()
         {
             string[] candidates = {

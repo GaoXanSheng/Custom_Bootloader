@@ -21,6 +21,7 @@ namespace DbgTool
 
             bool noElevate = false;
             string command = null;
+            string commandArg = null;
 
             for (int i = 0; i < args.Length; i++)
             {
@@ -39,6 +40,10 @@ namespace DbgTool
                 else if (command == null && !a.StartsWith("-"))
                 {
                     command = a;
+                }
+                else if (commandArg == null && !a.StartsWith("-"))
+                {
+                    commandArg = a;
                 }
             }
 
@@ -73,7 +78,7 @@ namespace DbgTool
             // CLI 命令行模式
             if (!string.IsNullOrEmpty(command))
             {
-                return RunCliCommand(command);
+                return RunCliCommand(command, commandArg);
             }
 
             // 交互式菜单模式
@@ -94,10 +99,12 @@ namespace DbgTool
             Console.WriteLine("  deploy          部署 build\\BOOTX64.efi 到 ESP 分区");
             Console.WriteLine("  boot            设置 Custom Bootloader 为固件第一启动项");
             Console.WriteLine("  log             查看 ESP 日志与版本 (unlock.log / version.txt)");
+            Console.WriteLine("  acpi            比对 Windows 当前 ACPI 表与 build\\Custom 补丁表");
+            Console.WriteLine("  nvassets [dir]  部署 NVIDIA 解锁资产到 ESP 根目录（默认 usb_ready 目录）");
             Console.WriteLine("  uninstall       卸载 Custom Bootloader (清理 BCD 项并还原系统引导)");
         }
 
-        private static int RunCliCommand(string cmd)
+        private static int RunCliCommand(string cmd, string arg)
         {
             switch (cmd.ToLowerInvariant())
             {
@@ -108,6 +115,11 @@ namespace DbgTool
                 case "log":
                     EspManager.ViewLog();
                     return 0;
+                case "acpi":
+                    AcpiInspector.Run();
+                    return 0;
+                case "nvassets":
+                    return NvAssetManager.Deploy(arg) ? 0 : 1;
                 case "uninstall":
                     return BcdManager.Uninstall() ? 0 : 1;
                 default:
@@ -127,7 +139,9 @@ namespace DbgTool
                 Console.WriteLine("  [1] 部署 BOOTX64.efi 到 ESP 分区 (deploy)");
                 Console.WriteLine("  [2] 设置 Custom Bootloader 为第一启动项 (boot)");
                 Console.WriteLine("  [3] 查看 ESP 日志与版本 (log: unlock.log / version.txt)");
-                Console.WriteLine("  [4] 卸载 Custom Bootloader (uninstall: 还原系统引导)");
+                Console.WriteLine("  [4] 比对 Windows ACPI 表与补丁表 (acpi)");
+                Console.WriteLine("  [5] 部署 NVIDIA 解锁资产到 ESP 根目录 (nvassets)");
+                Console.WriteLine("  [6] 卸载 Custom Bootloader (uninstall: 还原系统引导)");
                 Console.WriteLine("  [0] 退出");
                 Console.WriteLine();
                 Console.Write("  请选择操作: ");
@@ -155,6 +169,17 @@ namespace DbgTool
                         EspManager.ViewLog();
                         break;
                     case "4":
+                    case "ACPI":
+                        AcpiInspector.Run();
+                        break;
+                    case "5":
+                    case "NVASSETS":
+                        Console.Write("  资产源目录（回车使用默认 " + NvAssetManager.DefaultSourceDir + "）: ");
+                        string assetDir = Console.ReadLine();
+                        if (string.IsNullOrWhiteSpace(assetDir)) assetDir = NvAssetManager.DefaultSourceDir;
+                        NvAssetManager.Deploy(assetDir);
+                        break;
+                    case "6":
                     case "UNINSTALL":
                     case "U":
                         BcdManager.Uninstall();
